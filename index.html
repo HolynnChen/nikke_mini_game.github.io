@@ -1,0 +1,1841 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>9x9 背包堆积可视化</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card-bg: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --primary: #3b82f6;
+      --primary-700: #2563eb;
+      --border: #e5e7eb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, system-ui, Segoe UI, Roboto, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(180deg, #eef2ff 0%, #f8fafc 100%);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 1080px;
+      padding: 24px;
+    }
+
+    h2 {
+      text-align: center;
+      margin: 0 0 6px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      margin-bottom: 16px;
+    }
+
+    .container {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: 1fr 400px 1fr;
+      align-items: start;
+    }
+
+
+
+
+
+    .panel {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.06);
+    }
+
+    .panel h3 {
+      margin: 0;
+      font-size: 16px;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      min-height: 24px;
+    }
+
+    .panel-head .button-group {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+
+    .panel-head .button-group button {
+      padding: 6px 10px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .grid {
+      display: grid;
+      gap: 6px;
+      justify-content: center;
+    }
+
+    .cell {
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      border-radius: 6px;
+      transition: background 0.15s, transform 0.05s;
+      font-weight: 600;
+    }
+
+    .cell.block {
+      background: #111827;
+      color: #fff;
+      border-color: #111827;
+    }
+
+    .cell.free {
+      background: #ffffff;
+    }
+
+    .cell.free:hover {
+      background: #f3f6ff;
+    }
+
+    .cell:active {
+      transform: scale(0.98);
+    }
+
+    .resultGrid .cell {
+      width: 26px;
+      height: 26px;
+    }
+
+    .resultGrid .cell {
+      position: relative;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      min-width: 0; /* 允许flex项目收缩 */
+    }
+
+    #shapes {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 4px;
+    }
+
+
+
+    .shape {
+      display: inline-grid;
+      gap: 2px;
+      padding: 6px;
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+
+    .sq {
+      width: 10px;
+      height: 10px;
+      border: 1px solid #cbd5e1;
+      border-radius: 2px;
+      background: #fff;
+    }
+
+    .sq.on {
+      background: #64748b;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      margin-top: 12px;
+    }
+
+    select,
+    input[type="number"] {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--text);
+    }
+
+    input[type="number"] {
+      width: 80px;
+    }
+
+    button {
+      border: 0;
+      background: var(--primary);
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.05s;
+    }
+
+    button:hover {
+      background: var(--primary-700);
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    /* 取消按钮样式 */
+    button.cancel {
+      background: #dc2626;
+    }
+
+    button.cancel:hover {
+      background: #b91c1c;
+    }
+
+    .util {
+      display: flex;
+      justify-content: center;
+      align-items: baseline;
+      gap: 8px;
+      margin: 8px 0 12px;
+    }
+
+    .util strong {
+      font-size: 20px;
+      color: var(--primary-700);
+    }
+
+    .solutions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+      margin: 8px 0;
+    }
+
+    .summary {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      line-height: 1.4;
+    }
+
+
+    .progress-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+      height: 100%;
+    }
+
+    .progress-bar {
+      width: 80px;
+      height: 6px;
+      background: #e5e7eb;
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--primary) 0%, var(--primary-700) 100%);
+      border-radius: 3px;
+      width: 0%;
+      transition: width 0.2s ease-out;
+    }
+
+    .progress-text {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 500;
+      min-width: 28px;
+      text-align: right;
+    }
+
+    .footer {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 14px;
+      text-align: center;
+    }
+
+    .result-overlay {
+      position: absolute;
+      top: 50px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(255, 255, 255, 0.9);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0 0 12px 12px;
+      z-index: 10;
+    }
+
+    .result-overlay.show {
+      display: flex;
+    }
+
+    .loading-spinner {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid #e5e7eb;
+      border-top: 3px solid var(--primary);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .loading-text {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    /* 确保结果面板有相对定位 */
+    .result-panel {
+      position: relative;
+    }
+
+    @media (max-width: 1200px) {
+      .container {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      
+      #shapes {
+        grid-template-columns: repeat(2, minmax(0, 1fr)); /* 在两列布局时保持两列 */
+      }
+      
+      .row {
+        gap: 10px; /* 增加间距 */
+        padding: 8px 12px;
+      }
+      
+      input[type="number"] {
+        width: 70px !important; /* 恢复较大的输入框 */
+      }
+    }
+
+
+
+    @media (max-width: 900px) {
+      .container {
+        grid-template-columns: 1fr;
+      }
+
+      #shapes {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      
+      .row {
+        gap: 12px;
+        padding: 10px 14px;
+      }
+      
+      input[type="number"] {
+        width: 80px !important;
+      }
+    }
+
+
+
+  </style>
+</head>
+
+<body>
+  <div class="page">
+    <h2>9x9 背包堆积可视化</h2>
+    <div class="small">点击网格切换可用/不可用(x)。设置各形状数量，实时计算并展示最优堆积方案及利用率。最佳用途：帮你填缝。</div>
+
+    <div class="container">
+      <div class="panel">
+        <h3>背包 9x9</h3>
+        <div id="grid" class="grid"></div>
+        <div class="controls">
+          <button id="clear">重置背包状态</button>
+          <button id="fill">全部可用</button>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h3>物体数量</h3>
+          <div class="button-group">
+            <button id="clearCounts">清空物品数量</button>
+            <button id="calculate">计算结果</button>
+          </div>
+        </div>
+        <div id="shapes"></div>
+      </div>
+      <div class="panel result-panel">
+        <div class="panel-head">
+          <h3>结果</h3>
+          <div class="progress-container" id="progressContainer" style="display: none;">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <span class="progress-text" id="progressText">0%</span>
+          </div>
+        </div>
+        <div id="util" class="util">利用率: --</div>
+        <div class="solutions">
+          <span id="solutionCount">解法：0种</span>
+          <label>选择:
+            <select id="solutionSelect"></select>
+          </label>
+        </div>
+        <div id="vis" class="grid resultGrid"></div>
+        <div id="countsSummary" class="summary"></div>
+        <div class="result-overlay" id="resultOverlay">
+          <div class="loading-spinner">
+            <div class="spinner"></div>
+            <div class="loading-text">正在计算最优方案...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <div class="footer">说明：物体不可旋转；字母表示不同形状的摆放；空余可用位置显示为空，障碍显示为 x。</div>
+  </div>
+
+  <script>
+    const MAX = 9;
+    let SIZE = 9;
+
+    // Shapes copied from current game.py item_sharp
+    const ITEM_SHAPES = [
+      [[1, 1, 1], [1, 0, 0]],
+      [[0, 0, 0, 1], [1, 1, 1, 1]],
+      [[1, 1, 1, 1], [0, 1, 0, 0]],
+      [[1, 1], [1, 0]],
+      [[1, 1], [1, 1]],
+      [[1], [1]],
+      [[1], [1], [1]],
+      [[1, 0], [1, 0], [1, 0], [1, 1]],
+      [[0, 1], [0, 1], [1, 1], [0, 1]],
+      [[1, 1, 1]],
+      [[1]]
+    ];
+
+    let counts = ITEM_SHAPES.map(_ => 0);
+    let pkg = Array.from({ length: SIZE }, (_, i) => Array.from({ length: SIZE }, (_, j) => i >= 2 && i <= 6 && j >= 3 && j <= 5 ? 'o' : 'x'));
+
+    // Persist/restore state -------------------------------------------------
+    const LS_COUNTS = 'packing_counts_v1';
+    const LS_PKG = 'packing_pkg_v1';
+    const LS_RESULTS = 'packing_results_v1';
+    
+    function saveState() {
+      try {
+        localStorage.setItem(LS_COUNTS, JSON.stringify(counts));
+        localStorage.setItem(LS_PKG, JSON.stringify(pkg));
+      } catch (e) { /* ignore quota errors */ }
+    }
+    
+    function saveResults(solutions, selectedIndex = 0) {
+      try {
+        const resultsData = {
+          solutions: solutions,
+          selectedIndex: selectedIndex,
+          timestamp: Date.now()
+        };
+        localStorage.setItem(LS_RESULTS, JSON.stringify(resultsData));
+      } catch (e) { /* ignore quota errors */ }
+    }
+    
+    function loadState() {
+      try {
+        const c = JSON.parse(localStorage.getItem(LS_COUNTS) || 'null');
+        const p = JSON.parse(localStorage.getItem(LS_PKG) || 'null');
+        if (Array.isArray(c) && c.length === ITEM_SHAPES.length && c.every(n => Number.isInteger(n) && n >= 0)) {
+          counts = c.slice();
+        }
+        if (Array.isArray(p) && p.length === SIZE && p.every(r => Array.isArray(r) && r.length === SIZE)) {
+          pkg = p.map(r => r.map(v => (v === 'x' ? 'x' : 'o')));
+        }
+      } catch (e) { /* ignore parse errors */ }
+    }
+    
+    function loadResults() {
+      try {
+        const resultsData = JSON.parse(localStorage.getItem(LS_RESULTS) || 'null');
+        if (resultsData && Array.isArray(resultsData.solutions) && resultsData.solutions.length > 0) {
+          return resultsData;
+        }
+      } catch (e) { /* ignore parse errors */ }
+      return null;
+    }
+
+    const gridEl = document.getElementById('grid');
+    const visEl = document.getElementById('vis');
+    const utilEl = document.getElementById('util');
+    const shapesEl = document.getElementById('shapes');
+    const clearBtn = document.getElementById('clear');
+    const fillBtn = document.getElementById('fill');
+    const clearCountsBtn = document.getElementById('clearCounts');
+    const calculateBtn = document.getElementById('calculate');
+
+    clearBtn.onclick = () => {
+      pkg = Array.from({ length: SIZE }, (_, i) => Array.from({ length: SIZE }, (_, j) => i >= 2 && i <= 6 && j >= 3 && j <= 5 ? 'o' : 'x'));
+      renderGrid();
+      saveState();
+    };
+    fillBtn.onclick = () => {
+      pkg = Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 'o'));
+      renderGrid();
+      saveState();
+    };
+    clearCountsBtn.onclick = () => {
+      counts = counts.map(() => 0);
+      document.querySelectorAll('#shapes input[type="number"]').forEach(inp => inp.value = '0');
+      saveState();
+    };
+    calculateBtn.onclick = () => {
+      requestSolve();
+    };
+
+    function renderGrid() {
+      gridEl.innerHTML = '';
+      gridEl.style.gridTemplateColumns = `repeat(${SIZE}, 28px)`;
+      for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+          const div = document.createElement('div');
+          const v = pkg[r][c];
+          div.className = 'cell ' + (v === 'x' ? 'block' : 'free');
+          div.textContent = v === 'x' ? 'x' : '';
+          div.onclick = () => {
+            pkg[r][c] = pkg[r][c] === 'x' ? 'o' : 'x';
+            renderGrid();
+            saveState();
+          };
+          gridEl.appendChild(div);
+        }
+      }
+    }
+
+    function renderShapes() {
+      shapesEl.innerHTML = '';
+      ITEM_SHAPES.forEach((s, idx) => {
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const label = document.createElement('div');
+        label.textContent = `${String.fromCharCode(65 + (idx % 26))}`;
+        label.style.fontWeight = '600';
+        label.style.fontSize = '14px';
+        label.style.color = '#374151';
+        label.style.minWidth = '18px';
+        label.style.flexShrink = '0';
+
+        label.style.textAlign = 'center';
+
+        const preview = document.createElement('div');
+
+        preview.className = 'shape';
+        preview.style.gridTemplateColumns = `repeat(${s[0].length}, 10px)`;
+        s.forEach(rr => rr.forEach(cc => {
+          const sq = document.createElement('div');
+          sq.className = 'sq ' + (cc ? 'on' : '');
+          preview.appendChild(sq);
+        }));
+
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.value = counts[idx];
+        input.style.width = '60px';
+        input.style.minWidth = '50px';
+        input.style.maxWidth = '70px';
+        input.style.textAlign = 'center';
+        input.style.fontWeight = '500';
+        input.style.flexShrink = '0'; /* 防止输入框被过度压缩 */
+
+        input.oninput = () => {
+          counts[idx] = Math.max(0, parseInt(input.value || '0', 10));
+          saveState();
+        };
+
+
+        row.appendChild(label);
+        row.appendChild(preview);
+        row.appendChild(input);
+        shapesEl.appendChild(row);
+      });
+    }
+
+    function area(shape) { return shape.flat().reduce((a, b) => a + (b ? 1 : 0), 0); }
+
+    // Solver (ported to JS) ---------------------------------------------
+    function computeFreeCells(grid) {
+      let n = 0; for (const row of grid) for (const c of row) if (c === 'o') n++; return n;
+    }
+    function firstFreeCell(grid) {
+      for (let i = 0; i < grid.length; i++) {
+        for (let j = 0; j < grid[0].length; j++) if (grid[i][j] === 'o') return [i, j];
+      }
+      return null;
+    }
+    // Check/place using an anchor so that shape[oi][oj] (which is 1) covers grid[r][c]
+    function canPlaceWithAnchor(grid, shape, r, c, oi, oj) {
+      const rows = grid.length, cols = grid[0].length;
+      const sh = shape.length, sw = shape[0].length;
+      for (let i = 0; i < sh; i++) {
+        for (let j = 0; j < sw; j++) {
+          if (shape[i][j] !== 1) continue;
+          const gr = r + (i - oi);
+          const gc = c + (j - oj);
+          if (gr < 0 || gc < 0 || gr >= rows || gc >= cols) return false;
+          if (grid[gr][gc] !== 'o') return false;
+        }
+      }
+      return true;
+    }
+    function placeWithAnchor(grid, shape, r, c, oi, oj, mark) {
+      for (let i = 0; i < shape.length; i++) {
+        for (let j = 0; j < shape[0].length; j++) {
+          if (shape[i][j] !== 1) continue;
+          const gr = r + (i - oi);
+          const gc = c + (j - oj);
+          grid[gr][gc] = mark;
+        }
+      }
+    }
+    function countFilled(grid) {
+      let n = 0; for (const row of grid) for (const c of row) if (Array.isArray(c)) n++; return n;
+    }
+    function deriveCountsFromGrid(grid, shapesLen) {
+      // Marks are ['i', idx, k]; count how many marks per idx
+      const counts = Array(shapesLen).fill(0);
+      for (const row of grid) {
+        for (const c of row) {
+          if (Array.isArray(c) && c[0] === 'i') counts[c[1]] += 1;
+        }
+      }
+      // Each item contributes area equal to item shape area; to get piece counts, divide by area
+      return counts.map((cells, idx) => {
+        const areaVal = area(ITEM_SHAPES[idx]);
+        return areaVal > 0 ? Math.round(cells / areaVal) : 0;
+      });
+    }
+
+    // 新架构：三阶段求解系统
+    let workerPool = [];
+    let currentSolveId = 0;
+    const MAX_WORKERS = navigator.hardwareConcurrency || 4; // 使用CPU核数，默认4个
+    let isCalculating = false; // 标记是否正在计算
+    let currentCalculationPromise = null; // 当前计算的Promise，用于取消
+    
+    // 第一阶段：生成所有饱和的物品组合（无法再添加任何物品的组合）
+    function generateValidCombinations(shapes, maxCounts, freeArea) {
+      const validCombinations = [];
+      
+      // 预计算每个物品的面积
+      const shapeAreas = shapes.map(shape => area(shape));
+      
+      function isSaturated(combination, currentArea) {
+        // 检查是否还能添加任何物品
+        for (let i = 0; i < shapes.length; i++) {
+          if (combination[i] < maxCounts[i] && currentArea + shapeAreas[i] <= freeArea) {
+            return false; // 还能添加第i种物品
+          }
+        }
+        return true; // 无法再添加任何物品，组合已饱和
+      }
+      
+      function backtrack(index, currentCombination, currentArea) {
+        if (currentArea > freeArea) return; // 剪枝：面积超限
+        
+        if (index === shapes.length) {
+          if (currentArea > 0 && isSaturated(currentCombination, currentArea)) {
+            // 只保留饱和的组合（无法再添加任何物品）
+            validCombinations.push([...currentCombination]);
+          }
+          return;
+        }
+        
+        const shapeArea = shapeAreas[index];
+        const maxPossible = Math.floor((freeArea - currentArea) / shapeArea);
+        const actualMax = Math.min(maxCounts[index], maxPossible);
+        
+        for (let count = 0; count <= actualMax; count++) {
+          currentCombination[index] = count;
+          backtrack(index + 1, currentCombination, currentArea + count * shapeArea);
+        }
+      }
+      
+      backtrack(0, new Array(shapes.length).fill(0), 0);
+      return validCombinations;
+    }
+    
+    // 创建单个Worker用于处理特定组合
+    function createCombinationWorker() {
+      const workerCode = `
+        const ITEM_SHAPES = [
+          [[1, 1, 1], [1, 0, 0]],
+          [[0, 0, 0, 1], [1, 1, 1, 1]],
+          [[1, 1, 1, 1], [0, 1, 0, 0]],
+          [[1, 1], [1, 0]],
+          [[1, 1], [1, 1]],
+          [[1], [1]],
+          [[1], [1], [1]],
+          [[1, 0], [1, 0], [1, 0], [1, 1]],
+          [[0, 1], [0, 1], [1, 1], [0, 1]],
+          [[1, 1, 1]],
+          [[1]]
+        ];
+        
+        const MAX_SOLUTIONS_PER_WORKER = 10; // 限制每个Worker最多保留10个解决方案
+        
+        function area(shape) { return shape.flat().reduce((a, b) => a + (b ? 1 : 0), 0); }
+        
+        function computeFreeCells(grid) {
+          let n = 0; for (const row of grid) for (const c of row) if (c === 'o') n++; return n;
+        }
+        
+        function firstFreeCell(grid) {
+          for (let i = 0; i < grid.length; i++) {
+            for (let j = 0; j < grid[0].length; j++) if (grid[i][j] === 'o') return [i, j];
+          }
+          return null;
+        }
+        
+        function canPlaceWithAnchor(grid, shape, r, c, oi, oj) {
+          const rows = grid.length, cols = grid[0].length;
+          const sh = shape.length, sw = shape[0].length;
+          for (let i = 0; i < sh; i++) {
+            for (let j = 0; j < sw; j++) {
+              if (shape[i][j] !== 1) continue;
+              const gr = r + (i - oi);
+              const gc = c + (j - oj);
+              if (gr < 0 || gc < 0 || gr >= rows || gc >= cols) return false;
+              if (grid[gr][gc] !== 'o') return false;
+            }
+          }
+          return true;
+        }
+        
+        function placeWithAnchor(grid, shape, r, c, oi, oj, mark) {
+          for (let i = 0; i < shape.length; i++) {
+            for (let j = 0; j < shape[0].length; j++) {
+              if (shape[i][j] !== 1) continue;
+              const gr = r + (i - oi);
+              const gc = c + (j - oj);
+              grid[gr][gc] = mark;
+            }
+          }
+        }
+        
+        function countFilled(grid) {
+          let n = 0; for (const row of grid) for (const c of row) if (Array.isArray(c)) n++; return n;
+        }
+        
+        // 压缩网格表示：只存储物品放置信息，而不是完整网格
+        function compressGrid(grid, originalGrid) {
+          const placements = [];
+          for (let r = 0; r < grid.length; r++) {
+            for (let c = 0; c < grid[0].length; c++) {
+              const cell = grid[r][c];
+              if (Array.isArray(cell) && cell[0] === 'i') {
+                placements.push({
+                  r: r,
+                  c: c,
+                  idx: cell[1],
+                  inst: cell[2]
+                });
+              }
+            }
+          }
+          return {
+            placements: placements,
+            rows: grid.length,
+            cols: grid[0].length
+          };
+        }
+        
+        // 从压缩格式重建网格（仅在需要时使用）
+        function decompressGrid(compressed, originalGrid) {
+          const grid = originalGrid.map(r => r.slice());
+          for (const p of compressed.placements) {
+            grid[p.r][p.c] = ['i', p.idx, p.inst];
+          }
+          return grid;
+        }
+        
+        // 计算物品使用数量（用于去重）
+        function calculateUsedCounts(placements, shapesLength) {
+          const counts = Array(shapesLength).fill(0);
+          const instanceCounts = new Map();
+          
+          for (const p of placements) {
+            const key = \`\${p.idx}_\${p.inst}\`;
+            if (!instanceCounts.has(key)) {
+              instanceCounts.set(key, 0);
+              counts[p.idx]++;
+            }
+          }
+          return counts;
+        }
+        
+        // 生成解决方案的唯一键（基于物品使用情况）
+        function getSolutionKey(placements, shapesLength) {
+          const usedCounts = calculateUsedCounts(placements, shapesLength);
+          return usedCounts.join(',');
+        }
+        
+        // 针对单个组合的优化求解器
+        function solveCombination(grid, shapes, counts, combinationIndex, totalCombinations) {
+          let bestFilled = -1;
+          const solutionMap = new Map(); // 用于去重：key -> compressed solution
+          const rows = grid.length, cols = grid[0].length;
+          
+          function cloneGrid(g) { return g.map(r => r.slice()); }
+          
+          function backtrack(cur, remaining, placedCounter) {
+            // 检查是否需要取消计算
+            if (shouldCancel) {
+              return;
+            }
+            
+            const filled = countFilled(cur);
+            let remainingFree = 0; 
+            for (const row of cur) for (const c of row) if (c === 'o') remainingFree++;
+            
+            // 剪枝：如果当前填充数加上剩余空间都不如最佳结果，直接返回
+            if (filled + remainingFree < bestFilled) return;
+
+            const next = firstFreeCell(cur);
+            if (!next) {
+              if (filled >= bestFilled) {
+                const compressed = compressGrid(cur, grid);
+                const solutionKey = getSolutionKey(compressed.placements, shapes.length);
+                
+                if (filled > bestFilled) {
+                  // 找到更好的解决方案，清空之前的结果
+                  bestFilled = filled;
+                  solutionMap.clear();
+                  solutionMap.set(solutionKey, { filled, compressed });
+                } else if (filled === bestFilled && !solutionMap.has(solutionKey)) {
+                  // 相同质量的新解决方案
+                  solutionMap.set(solutionKey, { filled, compressed });
+                  
+                  // 限制解决方案数量，防止内存溢出
+                  if (solutionMap.size > MAX_SOLUTIONS_PER_WORKER) {
+                    // 随机移除一些解决方案，保持多样性
+                    const keys = Array.from(solutionMap.keys());
+                    const toRemove = keys.slice(0, Math.floor(MAX_SOLUTIONS_PER_WORKER / 2));
+                    toRemove.forEach(key => solutionMap.delete(key));
+                  }
+                }
+              }
+              return;
+            }
+            
+            const [r, c] = next;
+            let triedPlacement = false;
+            
+            // 按面积从大到小排序，优先放置大物品
+            const itemIndices = [];
+            for (let idx = 0; idx < shapes.length; idx++) {
+              if (remaining[idx] > 0) {
+                itemIndices.push({ idx, area: area(shapes[idx]) });
+              }
+            }
+            itemIndices.sort((a, b) => b.area - a.area);
+            
+            for (const { idx } of itemIndices) {
+              const shape = shapes[idx];
+              
+              for (let oi = 0; oi < shape.length; oi++) {
+                for (let oj = 0; oj < shape[0].length; oj++) {
+                  if (shape[oi][oj] !== 1) continue;
+                  if (!canPlaceWithAnchor(cur, shape, r, c, oi, oj)) continue;
+                  
+                  triedPlacement = true;
+                  const mark = ['i', idx, placedCounter[idx]];
+                  placeWithAnchor(cur, shape, r, c, oi, oj, mark);
+                  remaining[idx] -= 1;
+                  placedCounter[idx] += 1;
+
+                  backtrack(cur, remaining, placedCounter);
+
+                  placeWithAnchor(cur, shape, r, c, oi, oj, 'o');
+                  remaining[idx] += 1;
+                  placedCounter[idx] -= 1;
+                }
+              }
+            }
+            
+            // 如果无法放置任何物品，将当前位置标记为障碍并继续
+            if (!triedPlacement) {
+              cur[r][c] = 'x';
+              backtrack(cur, remaining, placedCounter);
+              cur[r][c] = 'o';
+            }
+          }
+          
+          backtrack(grid.map(r => r.slice()), counts.slice(), Array(counts.length).fill(0));
+          
+          // 转换压缩的解决方案为最终格式
+          const solutions = Array.from(solutionMap.values()).map(sol => ({
+            filled: sol.filled,
+            compressed: sol.compressed
+          }));
+          
+          return { 
+            bestFilled, 
+            solutions, 
+            combinationIndex,
+            counts: counts.slice()
+          };
+        }
+        
+        let currentSolveId = null;
+        let shouldCancel = false;
+        
+        self.onmessage = function(e) {
+          const { type, grid, shapes, counts, combinationIndex, totalCombinations, solveId } = e.data;
+          
+          if (type === 'solveCombination') {
+            currentSolveId = solveId;
+            shouldCancel = false;
+            
+            try {
+              const result = solveCombination(grid, shapes, counts, combinationIndex, totalCombinations);
+              
+              // 检查是否在计算过程中被取消
+              if (shouldCancel && currentSolveId === solveId) {
+                self.postMessage({ 
+                  type: 'result', 
+                  result: {
+                    bestFilled: -1,
+                    solutions: [],
+                    combinationIndex: combinationIndex,
+                    counts: counts,
+                    cancelled: true
+                  }, 
+                  solveId 
+                });
+                return;
+              }
+              
+              // 只传输压缩的解决方案，减少数据传输量
+              const compactResult = {
+                bestFilled: result.bestFilled,
+                solutions: result.solutions, // 已经是压缩格式
+                combinationIndex: result.combinationIndex,
+                counts: result.counts
+              };
+              
+              self.postMessage({ type: 'result', result: compactResult, solveId });
+            } catch (error) {
+              self.postMessage({ type: 'error', error: error.message, solveId });
+            }
+          } else if (type === 'cancel') {
+            if (currentSolveId === solveId) {
+              shouldCancel = true;
+              console.log('Worker收到取消信号，solveId: ' + solveId);
+            }
+          }
+        };
+      `;
+      
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      return new Worker(URL.createObjectURL(blob));
+    }
+    
+    // Worker池管理
+    function initWorkerPool() {
+      // 清理现有Worker
+      workerPool.forEach(worker => worker.terminate());
+      workerPool = [];
+      
+      // 创建新的Worker池
+      for (let i = 0; i < MAX_WORKERS; i++) {
+        workerPool.push(createCombinationWorker());
+      }
+    }
+    
+    // 终止所有Worker
+    function terminateAllWorkers() {
+      workerPool.forEach(worker => worker.terminate());
+      workerPool = [];
+      console.log('所有Worker已终止');
+    }
+    
+    // 辅助函数：检查组合A是否是组合B的子集
+    function isSubset(smaller, larger) {
+      return smaller.every((count, idx) => count <= larger[idx]);
+    }
+    
+    // 辅助函数：计算组合的总面积
+    function getCombinationArea(combination, shapes) {
+      return combination.reduce((total, count, idx) => {
+        return total + count * area(shapes[idx]);
+      }, 0);
+    }
+    
+    // 新的三阶段求解架构
+    async function solveWithNewArchitecture(grid, shapes, counts, progressCallback, cancelToken) {
+      const freeArea = computeFreeCells(grid);
+      
+      // 检查是否已取消
+      if (cancelToken && cancelToken.cancelled) {
+        throw new Error('计算已取消');
+      }
+      
+      // 第一阶段：生成所有有效组合
+      console.log('第一阶段：生成有效物品组合...');
+      const validCombinations = generateValidCombinations(shapes, counts, freeArea);
+      console.log(`找到 ${validCombinations.length} 个有效组合`);
+      
+      if (validCombinations.length === 0) {
+        return { bestFilled: 0, solutions: [] };
+      }
+      
+      // 再次检查是否已取消
+      if (cancelToken && cancelToken.cancelled) {
+        throw new Error('计算已取消');
+      }
+      
+      // 按面积从大到小排序组合，优先计算大面积组合
+      validCombinations.sort((a, b) => {
+        const areaA = getCombinationArea(a, shapes);
+        const areaB = getCombinationArea(b, shapes);
+        return areaB - areaA;
+      });
+      
+      // 初始化Worker池
+      if (workerPool.length === 0) {
+        initWorkerPool();
+        console.log(`初始化Worker池：使用 ${MAX_WORKERS} 个Worker（CPU核数：${navigator.hardwareConcurrency || '未知'}）`);
+      }
+      
+      // 第二阶段：并行计算每个组合的最优放置（带子集剪枝）
+      console.log('第二阶段：并行计算最优放置方案...');
+      const solveId = ++currentSolveId;
+      
+      // 用于跟踪当前最佳组合，实现动态剪枝
+      let currentBestCombination = null;
+      let currentBestFilled = -1;
+      
+      // 分批处理组合，实现动态剪枝
+      const batchSize = Math.min(MAX_WORKERS * 2, validCombinations.length);
+      const allResults = [];
+      let processedCount = 0;
+      let skippedCount = 0;
+      
+      for (let batchStart = 0; batchStart < validCombinations.length; batchStart += batchSize) {
+        // 检查是否已取消
+        if (cancelToken && cancelToken.cancelled) {
+          throw new Error('计算已取消');
+        }
+        
+        const batchEnd = Math.min(batchStart + batchSize, validCombinations.length);
+        const batch = validCombinations.slice(batchStart, batchEnd);
+        
+        // 对当前批次应用多重剪枝策略
+        const filteredBatch = [];
+        for (let i = 0; i < batch.length; i++) {
+          const combination = batch[i];
+          const globalIndex = batchStart + i;
+          let shouldSkip = false;
+          let skipReason = '';
+          
+          // 剪枝策略1：子集剪枝 - 如果当前组合是已知最佳组合的子集，则跳过
+          if (currentBestCombination && 
+              isSubset(combination, currentBestCombination) && 
+              !combination.every((c, idx) => c === currentBestCombination[idx])) {
+            shouldSkip = true;
+            skipReason = '是最佳组合的子集';
+          }
+          
+          // 剪枝策略2：面积剪枝 - 如果组合的理论最大面积小于已知最优填充数，则跳过
+          if (!shouldSkip && currentBestFilled > 0) {
+            const theoreticalMaxArea = getCombinationArea(combination, shapes);
+            if (theoreticalMaxArea < currentBestFilled) {
+              shouldSkip = true;
+              skipReason = `理论最大面积${theoreticalMaxArea} < 已知最优${currentBestFilled}`;
+            }
+          }
+          
+          if (shouldSkip) {
+            // console.log(`剪枝：跳过组合 ${globalIndex + 1}（${skipReason}）`);
+            skippedCount++;
+            processedCount++;
+            
+            // 更新进度
+            const progress = (processedCount / validCombinations.length) * 100;
+            if (progressCallback) {
+              progressCallback(progress);
+            }
+            continue;
+          }
+          
+          filteredBatch.push({ combination, originalIndex: globalIndex });
+        }
+        
+        if (filteredBatch.length === 0) continue;
+        
+        // 跟踪当前批次的Worker和组合信息
+        const activeBatchWorkers = new Map(); // workerIndex -> { combination, promise, resolve, reject }
+        
+        // 并行处理当前批次
+        const batchPromises = filteredBatch.map(({ combination, originalIndex }) => {
+          return new Promise((resolve, reject) => {
+            const workerIndex = originalIndex % workerPool.length;
+            const worker = workerPool[workerIndex];
+            
+            // 记录当前Worker的任务信息
+            activeBatchWorkers.set(workerIndex, { 
+              combination, 
+              originalIndex,
+              resolve, 
+              reject,
+              theoreticalMaxArea: getCombinationArea(combination, shapes)
+            });
+            
+            const handleMessage = (e) => {
+              const { type, result, error, solveId: msgSolveId } = e.data;
+              
+              if (msgSolveId !== solveId) return;
+              
+              if (type === 'result') {
+                worker.removeEventListener('message', handleMessage);
+                activeBatchWorkers.delete(workerIndex);
+                
+                // 更新当前最佳组合（用于后续剪枝）
+                if (result.bestFilled > currentBestFilled) {
+                  const oldBestFilled = currentBestFilled;
+                  currentBestFilled = result.bestFilled;
+                  currentBestCombination = combination.slice();
+                  console.log(`🎯 更新全局最优解：填充数 ${oldBestFilled} → ${currentBestFilled}，组合 [${combination.join(',')}]`);
+                  
+                  // 立即取消当前批次中理论上不可能超越新最优解的Worker
+                  let cancelledWorkers = 0;
+                  for (const [wIdx, workerInfo] of activeBatchWorkers.entries()) {
+                    if (workerInfo.theoreticalMaxArea < currentBestFilled) {
+                      console.log(`🚫 取消Worker ${wIdx}：理论最大面积${workerInfo.theoreticalMaxArea} < 当前最优${currentBestFilled}`);
+                      
+                      // 发送取消消息给Worker
+                      workerPool[wIdx].postMessage({
+                        type: 'cancel',
+                        solveId: solveId
+                      });
+                      
+                      // 立即resolve这个Promise，标记为被取消
+                      workerInfo.resolve({
+                        bestFilled: -1,
+                        solutions: [],
+                        combinationIndex: workerInfo.originalIndex,
+                        counts: workerInfo.combination,
+                        cancelled: true
+                      });
+                      
+                      activeBatchWorkers.delete(wIdx);
+                      cancelledWorkers++;
+                      processedCount++;
+                    }
+                  }
+                  
+                  if (cancelledWorkers > 0) {
+                    console.log(`⚡ 已取消 ${cancelledWorkers} 个无效Worker，节省计算资源`);
+                  }
+                  
+                  // 计算因为这个新的最优解而可以跳过的剩余组合数量
+                  let canSkipCount = 0;
+                  for (let futureIdx = batchStart + filteredBatch.length; futureIdx < validCombinations.length; futureIdx++) {
+                    const futureCombination = validCombinations[futureIdx];
+                    const futureArea = getCombinationArea(futureCombination, shapes);
+                    if (futureArea < currentBestFilled) {
+                      canSkipCount++;
+                    }
+                  }
+                  if (canSkipCount > 0) {
+                    console.log(`⚡ 新最优解将使后续 ${canSkipCount} 个组合可被剪枝`);
+                  }
+                }
+                
+                resolve(result);
+                
+                processedCount++;
+                // 更新进度
+                const progress = (processedCount / validCombinations.length) * 100;
+                if (progressCallback) {
+                  progressCallback(progress);
+                }
+              } else if (type === 'error') {
+                worker.removeEventListener('message', handleMessage);
+                activeBatchWorkers.delete(workerIndex);
+                processedCount++;
+                reject(new Error(error));
+              }
+            };
+            
+            worker.addEventListener('message', handleMessage);
+            
+            worker.postMessage({
+              type: 'solveCombination',
+              grid: grid,
+              shapes: shapes,
+              counts: combination,
+              combinationIndex: originalIndex,
+              totalCombinations: validCombinations.length,
+              solveId: solveId
+            });
+          });
+        });
+        
+        // 等待当前批次完成
+        const batchResults = await Promise.allSettled(batchPromises);
+        
+        // 检查是否已取消
+        if (cancelToken && cancelToken.cancelled) {
+          throw new Error('计算已取消');
+        }
+        
+        allResults.push(...batchResults);
+      }
+      
+      const actualCalculated = validCombinations.length - skippedCount;
+      const pruningEfficiency = validCombinations.length > 0 ? (skippedCount / validCombinations.length * 100).toFixed(1) : '0.0';
+      console.log(`📊 剪枝统计：总组合 ${validCombinations.length}，跳过 ${skippedCount} (${pruningEfficiency}%)，实际计算 ${actualCalculated}`);
+      
+      // 第三阶段：汇总最优结果
+      console.log('第三阶段：汇总最优结果...');
+      const successfulResults = allResults
+        .filter(r => r.status === 'fulfilled' && r.value.solutions.length > 0 && !r.value.cancelled)
+        .map(r => r.value);
+      
+      const cancelledResults = allResults
+        .filter(r => r.status === 'fulfilled' && r.value.cancelled)
+        .length;
+      
+      if (cancelledResults > 0) {
+        console.log(`📊 优化统计：成功取消 ${cancelledResults} 个无效Worker，节省计算资源`);
+      }
+      
+      if (successfulResults.length === 0) {
+        return { bestFilled: 0, solutions: [] };
+      }
+      
+      // 找到全局最优填充数
+      const globalBestFilled = Math.max(...successfulResults.map(r => r.bestFilled));
+      
+      // 解压缩函数（在主线程中）
+      function decompressGridInMain(compressed, originalGrid) {
+        const grid = originalGrid.map(r => r.slice());
+        for (const p of compressed.placements) {
+          grid[p.r][p.c] = ['i', p.idx, p.inst];
+        }
+        return grid;
+      }
+      
+      // 收集所有最优解并解压缩
+      const allBestSolutions = [];
+      const solutionKeys = new Set(); // 用于主线程最终去重
+      
+      for (const result of successfulResults) {
+        if (result.bestFilled === globalBestFilled) {
+          for (const solution of result.solutions) {
+            // 计算解决方案的唯一键
+            const usedCounts = Array(ITEM_SHAPES.length).fill(0);
+            const instanceCounts = new Map();
+            
+            for (const p of solution.compressed.placements) {
+              const key = `${p.idx}_${p.inst}`;
+              if (!instanceCounts.has(key)) {
+                instanceCounts.set(key, 0);
+                usedCounts[p.idx]++;
+              }
+            }
+            
+            const solutionKey = usedCounts.join(',');
+            if (!solutionKeys.has(solutionKey)) {
+              solutionKeys.add(solutionKey);
+              
+              // 只在需要时解压缩网格
+              const decompressedGrid = decompressGridInMain(solution.compressed, grid);
+              
+              allBestSolutions.push({
+                filled: solution.filled,
+                grid: decompressedGrid,
+                counts: result.counts
+              });
+              
+              // 限制最终解决方案数量，防止主线程内存溢出
+              if (allBestSolutions.length >= 50) {
+                console.log('达到解决方案数量限制，停止收集更多方案');
+                break;
+              }
+            }
+          }
+        }
+        
+        if (allBestSolutions.length >= 50) break;
+      }
+      
+      console.log(`最终收集到 ${allBestSolutions.length} 个不同的最优解决方案`);
+      
+      return { 
+        bestFilled: globalBestFilled, 
+        solutions: allBestSolutions 
+      };
+    }
+
+
+
+    function formatResultJSGrid(bestGrid, originalGrid) {
+      const totalFree = computeFreeCells(originalGrid);
+      const filled = countFilled(bestGrid);
+      const util = totalFree === 0 ? 0 : filled / totalFree;
+      const vis = [];
+      const idGrid = [];
+      for (let i = 0; i < bestGrid.length; i++) {
+        const row = [];
+        const idRow = [];
+        for (let j = 0; j < bestGrid[0].length; j++) {
+          const cell = bestGrid[i][j];
+          if (cell === 'x' && originalGrid[i][j] === 'o') row.push('o');
+          else if (cell === 'x' || cell === 'o') row.push(cell);
+          else if (Array.isArray(cell)) {
+            const idx = cell[1];
+            row.push(String.fromCharCode(65 + (idx % 26)));
+          } else row.push(cell);
+          // id grid: store item idx and instance id if present
+          if (Array.isArray(cell) && cell[0] === 'i') {
+            idRow.push({ idx: cell[1], inst: cell[2] });
+          } else {
+            idRow.push(null);
+          }
+        }
+        vis.push(row);
+        idGrid.push(idRow);
+      }
+      return { util, vis, idGrid };
+    }
+
+    function renderVis(grid, idGrid) {
+      const rows = grid.length, cols = grid[0]?.length || 0;
+      visEl.style.gridTemplateColumns = `repeat(${cols}, 24px)`;
+      visEl.innerHTML = '';
+      // Build high-contrast colors for instances and ensure adjacent instances differ strongly
+      function keyOf(info) { return info ? `${info.idx}#${info.inst}` : '' }
+      function listInstances() {
+        const set = new Set();
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+          const info = idGrid ? idGrid[r][c] : null;
+          if (info) set.add(keyOf(info));
+        }
+        return Array.from(set);
+      }
+      function buildAdj() {
+        const adj = new Map();
+        const add = (a, b) => { if (!adj.has(a)) adj.set(a, new Set()); if (!adj.has(b)) adj.set(b, new Set()); if (a !== b) { adj.get(a).add(b); adj.get(b).add(a); } };
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+          const a = idGrid ? idGrid[r][c] : null; if (!a) continue;
+          const ka = keyOf(a);
+          if (r + 1 < rows) { const b = idGrid[r + 1][c]; if (b && keyOf(b) !== ka) add(ka, keyOf(b)); }
+          if (c + 1 < cols) { const b = idGrid[r][c + 1]; if (b && keyOf(b) !== ka) add(ka, keyOf(b)); }
+        }
+        return adj;
+      }
+      function generatePalette() {
+        const hs = []; for (let h = 0; h < 360; h += 30) hs.push(h);
+        const palette = [];
+        const sats = [75, 85];
+        const lights = [45, 55];
+        for (const h of hs) {
+          for (const s of sats) { for (const l of lights) { palette.push({ h, s, l }); } }
+        }
+        return palette;
+      }
+      function hueDist(a, b) {
+        const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d);
+      }
+      function colorDistance(c1, c2) {
+        if (!c1 || !c2) return 360;
+        return hueDist(c1.h, c2.h) + Math.abs((c1.l || 0) - (c2.l || 0)) * 0.5 + Math.abs((c1.s || 0) - (c2.s || 0)) * 0.2;
+      }
+      function toCss(c) { return `hsl(${c.h}deg ${c.s}% ${c.l}%)`; }
+      function darker(c, dl = 15) { return { h: c.h, s: c.s, l: Math.max(10, c.l - dl) }; }
+      function textColor(c) { return (c.l < 50) ? '#ffffff' : '#111827'; }
+      function assignColors(adj) {
+        const nodes = listInstances();
+        const palette = generatePalette();
+        // order by degree desc
+        const degree = new Map();
+        nodes.forEach(k => degree.set(k, (adj.get(k)?.size) || 0));
+        nodes.sort((a, b) => ((degree.get(b) || 0) - (degree.get(a) || 0)));
+        const colorMap = new Map();
+        for (const k of nodes) {
+          const neighborColors = Array.from(adj.get(k) || []).map(n => colorMap.get(n)).filter(Boolean);
+          let best = null, bestScore = -1;
+          for (const c of palette) {
+            const minDist = neighborColors.length ? Math.min(...neighborColors.map(nc => colorDistance(c, nc))) : 360;
+            if (minDist > bestScore) { bestScore = minDist; best = c; }
+          }
+          // fallback in unlikely case
+          colorMap.set(k, best || palette[0]);
+        }
+        return colorMap;
+      }
+      const adj = idGrid ? buildAdj() : new Map();
+      const colorMap = idGrid ? assignColors(adj) : new Map();
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const div = document.createElement('div');
+          div.className = 'cell';
+          const v = grid[r][c];
+          const info = idGrid ? idGrid[r][c] : null;
+          if (v === 'x') { div.classList.add('block'); div.textContent = 'x'; }
+          else if (v === 'o') { div.classList.add('free'); div.textContent = ''; }
+          else {
+            div.classList.add('free');
+            div.textContent = v;
+          }
+          // Fill color per item instance (no colored borders needed)
+          if (info) {
+            const k = keyOf(info);
+            const colObj = colorMap.get(k);
+            if (colObj) {
+              const fill = toCss(colObj);
+              div.style.backgroundColor = fill;
+              div.style.color = textColor(colObj);
+            }
+          }
+          visEl.appendChild(div);
+        }
+      }
+    }
+
+    function renderCountsSummary(usedCounts) {
+      const summaryEl = document.getElementById('countsSummary');
+      summaryEl.innerHTML = ''; // 清空内容
+      
+      const hasUsedItems = usedCounts.some(count => count > 0);
+      if (!hasUsedItems) {
+        summaryEl.textContent = '';
+        return;
+      }
+      
+      // 创建标题
+      const titleSpan = document.createElement('span');
+      titleSpan.textContent = '使用数量：';
+      titleSpan.style.marginRight = '8px';
+      summaryEl.appendChild(titleSpan);
+      
+      // 为每个使用的物品创建形状显示
+      for (let idx = 0; idx < ITEM_SHAPES.length; idx++) {
+        const provided = counts[idx] || 0; // 用户提供的数量
+        if (provided <= 0) continue; // 只显示用户设置了数量的物品
+        
+        const used = usedCounts[idx] || 0;
+        const remain = Math.max(0, provided - used);
+        
+        // 创建物品容器
+        const itemContainer = document.createElement('span');
+        itemContainer.style.display = 'inline-flex';
+        itemContainer.style.alignItems = 'center'; // 垂直居中
+        itemContainer.style.marginRight = '12px';
+        itemContainer.style.marginBottom = '4px';
+        itemContainer.style.verticalAlign = 'middle'; // 确保整个容器相对于其他内容垂直居中
+        
+        // 创建缩小的形状显示
+        const shapeDiv = document.createElement('div');
+        shapeDiv.className = 'shape';
+        shapeDiv.style.display = 'inline-grid';
+        shapeDiv.style.gap = '1px';
+        shapeDiv.style.padding = '2px';
+        shapeDiv.style.background = '#f9fafb';
+        shapeDiv.style.border = '1px solid var(--border)';
+        shapeDiv.style.borderRadius = '4px';
+        shapeDiv.style.marginRight = '4px';
+
+        
+        const shape = ITEM_SHAPES[idx];
+        shapeDiv.style.gridTemplateColumns = `repeat(${shape[0].length}, 6px)`;
+        
+        shape.forEach(row => {
+          row.forEach(cell => {
+            const sq = document.createElement('div');
+            sq.style.width = '6px';
+            sq.style.height = '6px';
+            sq.style.border = '1px solid #cbd5e1';
+            sq.style.borderRadius = '1px';
+            sq.style.background = cell ? '#64748b' : '#fff';
+            shapeDiv.appendChild(sq);
+          });
+        });
+        
+        // 创建数量文本
+        const countText = document.createElement('span');
+        countText.style.fontSize = '12px';
+        countText.style.color = 'var(--muted)';
+        countText.style.lineHeight = '1'; // 设置行高为1，避免额外的行间距影响对齐
+        countText.textContent = remain > 0 ? `${used}(${remain})` : `${used}`;
+        
+        itemContainer.appendChild(shapeDiv);
+        itemContainer.appendChild(countText);
+        summaryEl.appendChild(itemContainer);
+      }
+    }
+
+    const solutionSelect = document.getElementById('solutionSelect');
+    const solutionCountEl = document.getElementById('solutionCount');
+    let solveTimer = null;
+    let currentSolutions = [];
+    let progressTimeout = null; // 进度条显示的定时器
+    
+    function loadAndDisplayResults() {
+      const resultsData = loadResults();
+      if (!resultsData || !resultsData.solutions || resultsData.solutions.length === 0) {
+        // 没有保存的结果，显示默认状态
+        utilEl.innerHTML = '利用率: --';
+        visEl.innerHTML = '';
+        document.getElementById('countsSummary').textContent = '';
+        solutionCountEl.textContent = '解法：0种';
+        solutionSelect.innerHTML = '';
+        renderVis(Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 'o')));
+        return;
+      }
+      
+      const { solutions, selectedIndex } = resultsData;
+      currentSolutions = solutions;
+      const totalFree = computeFreeCells(pkg);
+      
+      // 重建选项
+      solutionSelect.innerHTML = '';
+      solutionCountEl.textContent = `解法：${solutions.length}种`;
+      
+      solutions.forEach((s, i) => {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = `方案 ${i + 1}`;
+        solutionSelect.appendChild(opt);
+        opt.dataset.counts = JSON.stringify(s.counts);
+      });
+      
+      // 选择之前保存的方案
+      const validIndex = Math.min(selectedIndex || 0, solutions.length - 1);
+      solutionSelect.value = String(validIndex);
+      
+      // 显示选中的方案
+      const selectedSolution = solutions[validIndex];
+      const { util, vis, idGrid } = formatResultJSGrid(selectedSolution.grid, pkg);
+      utilEl.innerHTML = `利用率: <strong>${(util * 100).toFixed(2)}%</strong>`;
+      renderVis(vis, idGrid);
+      
+      const opt = solutionSelect.options[validIndex];
+      if (opt && opt.dataset.counts) {
+        renderCountsSummary(JSON.parse(opt.dataset.counts));
+      }
+    }
+    
+    // 清空当前显示的结果
+    function clearCurrentResults() {
+      utilEl.innerHTML = '利用率: --';
+      visEl.innerHTML = '';
+      document.getElementById('countsSummary').textContent = '';
+      solutionCountEl.textContent = '解法：0种';
+      solutionSelect.innerHTML = '';
+      currentSolutions = [];
+      // 显示空的网格
+      renderVis(Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 'o')));
+    }
+    
+    // 更新按钮状态
+    function updateCalculateButton(calculating) {
+      const calculateBtn = document.getElementById('calculate');
+      if (calculating) {
+        calculateBtn.textContent = '取消计算';
+        calculateBtn.classList.add('cancel');
+      } else {
+        calculateBtn.textContent = '计算结果';
+        calculateBtn.classList.remove('cancel');
+      }
+    }
+    
+    // 取消当前计算
+    function cancelCalculation() {
+      if (!isCalculating) return;
+      
+      console.log('用户取消计算');
+      isCalculating = false;
+      
+      // 清除进度条显示的定时器
+      if (progressTimeout) {
+        clearTimeout(progressTimeout);
+        progressTimeout = null;
+      }
+      
+      // 设置取消标记
+      if (currentCalculationPromise && currentCalculationPromise.cancelToken) {
+        currentCalculationPromise.cancelToken.cancelled = true;
+      }
+      
+      // 终止所有Worker
+      terminateAllWorkers();
+      
+      // 隐藏进度条和遮罩
+      const progressContainer = document.getElementById('progressContainer');
+      const resultOverlay = document.getElementById('resultOverlay');
+      progressContainer.style.display = 'none';
+      resultOverlay.classList.remove('show');
+      
+      // 恢复按钮状态
+      updateCalculateButton(false);
+      
+      console.log('计算已取消');
+    }
+    
+    function requestSolve() {
+      // 如果正在计算，则取消计算
+      if (isCalculating) {
+        cancelCalculation();
+        return;
+      }
+      
+      // 检查是否有物品数量设置
+      const hasItems = counts.some(count => count > 0);
+      if (!hasItems) {
+        // 没有设置任何物品数量，直接显示空结果
+        clearCurrentResults();
+        utilEl.innerHTML = '利用率: <strong>0.00%</strong>';
+        solutionCountEl.textContent = '解法：0种';
+        saveResults([]);
+        return;
+      }
+      
+      clearTimeout(solveTimer);
+      solveTimer = setTimeout(() => {
+        // 标记开始计算
+        isCalculating = true;
+        
+        // 清空当前结果
+        clearCurrentResults();
+        
+        // 更新按钮状态
+        updateCalculateButton(true);
+        
+        // 获取进度条和遮罩元素
+        const progressContainer = document.getElementById('progressContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+        const resultOverlay = document.getElementById('resultOverlay');
+        
+        // 初始化进度条状态（但不显示）
+        progressFill.style.width = '0%';
+        progressText.textContent = '0%';
+        
+        // 进度回调函数，添加防抖和平滑处理
+        let lastDisplayedProgress = 0;
+        const updateProgress = (progress) => {
+          const roundedProgress = Math.round(progress);
+          // 只有当进度真正增加时才更新显示，避免反复横跳
+          if (roundedProgress > lastDisplayedProgress) {
+            lastDisplayedProgress = roundedProgress;
+            progressFill.style.width = `${roundedProgress}%`;
+            progressText.textContent = `${roundedProgress}%`;
+          }
+        };
+        
+        // 延迟300毫秒显示进度条和遮罩
+        progressTimeout = setTimeout(() => {
+          if (isCalculating) {
+            progressContainer.style.display = 'flex';
+            resultOverlay.classList.add('show');
+          }
+        }, 300);
+        
+        // 立即开始计算
+        setTimeout(async () => {
+          try {
+            // 创建取消令牌
+            const cancelToken = { cancelled: false };
+            
+            // 创建计算Promise并保存引用
+            currentCalculationPromise = solveWithNewArchitecture(pkg, ITEM_SHAPES, counts, updateProgress, cancelToken);
+            currentCalculationPromise.cancelToken = cancelToken;
+            
+            // 使用新的三阶段架构进行求解
+            const { bestFilled, solutions } = await currentCalculationPromise;
+            
+            // 计算完成，取消进度条显示的定时器
+            clearTimeout(progressTimeout);
+            
+            // 计算完成后立即显示100%
+            updateProgress(100);
+            
+            // 处理结果（solutions已经包含counts信息，无需重新推导）
+            const totalFree = computeFreeCells(pkg);
+            const seen = new Map(); // key -> {filled, grid, counts}
+            const unique = [];
+            
+            for (const s of solutions) {
+              // 使用已有的counts信息，或者从grid推导
+              const countsToUse = s.counts || deriveCountsFromGrid(s.grid, ITEM_SHAPES.length);
+              const key = countsToUse.join(',');
+              if (!seen.has(key)) {
+                const entry = { ...s, counts: countsToUse };
+                seen.set(key, entry);
+                unique.push(entry);
+              }
+            }
+            
+            currentSolutions = unique;
+            
+            // 构建选项
+            solutionSelect.innerHTML = '';
+            if (unique.length === 0) {
+              utilEl.innerHTML = '利用率: --';
+              visEl.innerHTML = '';
+              document.getElementById('countsSummary').textContent = '';
+              solutionCountEl.textContent = '解法：0种';
+              // 保存空结果
+              saveResults([]);
+              return;
+            }
+            
+            solutionCountEl.textContent = `解法：${unique.length}种`;
+            unique.forEach((s, i) => {
+              const util = totalFree === 0 ? 0 : s.filled / totalFree;
+              const opt = document.createElement('option');
+              opt.value = String(i);
+              opt.textContent = `方案 ${i + 1}`;
+              solutionSelect.appendChild(opt);
+              // Store counts for later
+              opt.dataset.counts = JSON.stringify(s.counts);
+            });
+            
+            // 默认选择第一个解决方案
+            solutionSelect.value = '0';
+            const first = unique[0];
+            const { util, vis, idGrid } = formatResultJSGrid(first.grid, pkg);
+            utilEl.innerHTML = `利用率: <strong>${(util * 100).toFixed(2)}%</strong>`;
+            renderVis(vis, idGrid);
+            renderCountsSummary(JSON.parse(solutionSelect.options[0].dataset.counts));
+            
+            // 保存计算结果
+            saveResults(unique, 0);
+            
+            // 隐藏进度条和遮罩
+            progressContainer.style.display = 'none';
+            resultOverlay.classList.remove('show');
+            
+          } catch (error) {
+            console.error('计算过程中出现错误:', error);
+            
+            // 计算出错，取消进度条显示的定时器
+            clearTimeout(progressTimeout);
+            
+            // 如果是取消操作，不显示错误信息
+            if (error.message !== '计算已取消') {
+              utilEl.innerHTML = '计算出错，请重试';
+            }
+            
+            progressContainer.style.display = 'none';
+            resultOverlay.classList.remove('show');
+          } finally {
+            // 恢复计算状态和按钮
+            isCalculating = false;
+            updateCalculateButton(false);
+            currentCalculationPromise = null;
+          }
+        }, 10); // 短暂延迟让进度条显示
+      }, 50);
+    }
+
+    solutionSelect.onchange = () => {
+      const idx = parseInt(solutionSelect.value, 10);
+      const s = currentSolutions[idx];
+      const { util, vis, idGrid } = formatResultJSGrid(s.grid, pkg);
+      utilEl.innerHTML = `利用率: <strong>${(util * 100).toFixed(2)}%</strong>`;
+      renderVis(vis, idGrid);
+      const opt = solutionSelect.options[solutionSelect.selectedIndex];
+      renderCountsSummary(JSON.parse(opt.dataset.counts || '[]'));
+      
+      // 保存当前选中的方案索引
+      if (currentSolutions.length > 0) {
+        saveResults(currentSolutions, idx);
+      }
+    };
+
+    function init() {
+      loadState();
+      renderGrid();
+      renderShapes();
+      // 载入并显示上次的计算结果
+      loadAndDisplayResults();
+    }
+    init();
+  </script>
+</body>
+
+</html>
