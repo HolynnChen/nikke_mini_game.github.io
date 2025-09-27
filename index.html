@@ -1168,6 +1168,11 @@
               
               if (type === 'result') {
                 worker.removeEventListener('message', handleMessage);
+                
+                // 检查这个Worker是否已经被标记为取消，如果是则不重复计数
+                const workerInfo = activeBatchWorkers.get(workerIndex);
+                const wasAlreadyCancelled = workerInfo && workerInfo.cancelled;
+                
                 activeBatchWorkers.delete(workerIndex);
                 
                 // 更新当前最佳组合（用于后续剪枝）
@@ -1189,6 +1194,9 @@
                         solveId: solveId
                       });
                       
+                      // 标记Worker为已取消，避免重复计数
+                      workerInfo.cancelled = true;
+                      
                       // 立即resolve这个Promise，标记为被取消
                       workerInfo.resolve({
                         bestFilled: -1,
@@ -1200,7 +1208,15 @@
                       
                       activeBatchWorkers.delete(wIdx);
                       cancelledWorkers++;
+                      
+                      // 被取消的Worker需要在这里计数，因为它们不会触发正常的handleMessage
                       processedCount++;
+                      
+                      // 更新进度
+                      const progress = (processedCount / validCombinations.length) * 100;
+                      if (progressCallback) {
+                        progressCallback(progress);
+                      }
                     }
                   }
                   
@@ -1224,16 +1240,36 @@
                 
                 resolve(result);
                 
-                processedCount++;
-                // 更新进度
-                const progress = (processedCount / validCombinations.length) * 100;
-                if (progressCallback) {
-                  progressCallback(progress);
+                // 只有在Worker没有被预先取消的情况下才增加计数
+                // 被取消的Worker已经在动态取消时计数了，这里不再重复计数
+                if (!wasAlreadyCancelled && !result.cancelled) {
+                  processedCount++;
+                  // 更新进度
+                  const progress = (processedCount / validCombinations.length) * 100;
+                  if (progressCallback) {
+                    progressCallback(progress);
+                  }
                 }
               } else if (type === 'error') {
                 worker.removeEventListener('message', handleMessage);
+                
+                // 检查这个Worker是否已经被标记为取消
+                const workerInfo = activeBatchWorkers.get(workerIndex);
+                const wasAlreadyCancelled = workerInfo && workerInfo.cancelled;
+                
                 activeBatchWorkers.delete(workerIndex);
-                processedCount++;
+                
+                // 只有在Worker没有被预先取消的情况下才增加计数
+                // 被取消的Worker已经在动态取消时计数了，这里不再重复计数
+                if (!wasAlreadyCancelled) {
+                  processedCount++;
+                  // 更新进度
+                  const progress = (processedCount / validCombinations.length) * 100;
+                  if (progressCallback) {
+                    progressCallback(progress);
+                  }
+                }
+                
                 reject(new Error(error));
               }
             };
