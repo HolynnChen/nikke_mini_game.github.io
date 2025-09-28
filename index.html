@@ -471,16 +471,16 @@
 
     // Shapes copied from current game.py item_sharp
     const ITEM_SHAPES = [
-      [[1, 1, 1], [1, 0, 0]],
-      [[0, 0, 0, 1], [1, 1, 1, 1]],
-      [[1, 1, 1, 1], [0, 1, 0, 0]],
-      [[1, 1], [1, 0]],
-      [[1, 1], [1, 1]],
-      [[1], [1]],
-      [[1], [1], [1]],
       [[1, 0], [1, 0], [1, 0], [1, 1]],
       [[0, 1], [0, 1], [1, 1], [0, 1]],
+      [[0, 0, 0, 1], [1, 1, 1, 1]],
+      [[1, 1, 1, 1], [0, 1, 0, 0]],
+      [[1, 1, 1], [1, 0, 0]],
+      [[1, 1], [1, 1]],
+      [[1, 1], [1, 0]],
+      [[1], [1], [1]],
       [[1, 1, 1]],
+      [[1], [1]],
       [[1]]
     ];
 
@@ -636,37 +636,6 @@
     function computeFreeCells(grid) {
       let n = 0; for (const row of grid) for (const c of row) if (c === 'o') n++; return n;
     }
-    function firstFreeCell(grid) {
-      for (let i = 0; i < grid.length; i++) {
-        for (let j = 0; j < grid[0].length; j++) if (grid[i][j] === 'o') return [i, j];
-      }
-      return null;
-    }
-    // Check/place using an anchor so that shape[oi][oj] (which is 1) covers grid[r][c]
-    function canPlaceWithAnchor(grid, shape, r, c, oi, oj) {
-      const rows = grid.length, cols = grid[0].length;
-      const sh = shape.length, sw = shape[0].length;
-      for (let i = 0; i < sh; i++) {
-        for (let j = 0; j < sw; j++) {
-          if (shape[i][j] !== 1) continue;
-          const gr = r + (i - oi);
-          const gc = c + (j - oj);
-          if (gr < 0 || gc < 0 || gr >= rows || gc >= cols) return false;
-          if (grid[gr][gc] !== 'o') return false;
-        }
-      }
-      return true;
-    }
-    function placeWithAnchor(grid, shape, r, c, oi, oj, mark) {
-      for (let i = 0; i < shape.length; i++) {
-        for (let j = 0; j < shape[0].length; j++) {
-          if (shape[i][j] !== 1) continue;
-          const gr = r + (i - oi);
-          const gc = c + (j - oj);
-          grid[gr][gc] = mark;
-        }
-      }
-    }
     function countFilled(grid) {
       let n = 0; for (const row of grid) for (const c of row) if (Array.isArray(c)) n++; return n;
     }
@@ -737,273 +706,263 @@
     // 创建单个Worker用于处理特定组合
     function createCombinationWorker() {
       const workerCode = `
-        const ITEM_SHAPES = [
-          [[1, 1, 1], [1, 0, 0]],
-          [[0, 0, 0, 1], [1, 1, 1, 1]],
-          [[1, 1, 1, 1], [0, 1, 0, 0]],
-          [[1, 1], [1, 0]],
-          [[1, 1], [1, 1]],
-          [[1], [1]],
-          [[1], [1], [1]],
-          [[1, 0], [1, 0], [1, 0], [1, 1]],
-          [[0, 1], [0, 1], [1, 1], [0, 1]],
-          [[1, 1, 1]],
-          [[1]]
-        ];
-        
-        const MAX_SOLUTIONS_PER_WORKER = 10; // 限制每个Worker最多保留10个解决方案
-        
-        function area(shape) { return shape.flat().reduce((a, b) => a + (b ? 1 : 0), 0); }
-        
-        function computeFreeCells(grid) {
-          let n = 0; for (const row of grid) for (const c of row) if (c === 'o') n++; return n;
-        }
-        
-        function firstFreeCell(grid) {
-          for (let i = 0; i < grid.length; i++) {
-            for (let j = 0; j < grid[0].length; j++) if (grid[i][j] === 'o') return [i, j];
-          }
-          return null;
-        }
-        
-        function canPlaceWithAnchor(grid, shape, r, c, oi, oj) {
-          const rows = grid.length, cols = grid[0].length;
-          const sh = shape.length, sw = shape[0].length;
-          for (let i = 0; i < sh; i++) {
-            for (let j = 0; j < sw; j++) {
-              if (shape[i][j] !== 1) continue;
-              const gr = r + (i - oi);
-              const gc = c + (j - oj);
-              if (gr < 0 || gc < 0 || gr >= rows || gc >= cols) return false;
-              if (grid[gr][gc] !== 'o') return false;
-            }
-          }
-          return true;
-        }
-        
-        function placeWithAnchor(grid, shape, r, c, oi, oj, mark) {
-          for (let i = 0; i < shape.length; i++) {
-            for (let j = 0; j < shape[0].length; j++) {
-              if (shape[i][j] !== 1) continue;
-              const gr = r + (i - oi);
-              const gc = c + (j - oj);
-              grid[gr][gc] = mark;
-            }
-          }
-        }
-        
-        function countFilled(grid) {
-          let n = 0; for (const row of grid) for (const c of row) if (Array.isArray(c)) n++; return n;
-        }
-        
-        // 压缩网格表示：只存储物品放置信息，而不是完整网格
-        function compressGrid(grid, originalGrid) {
-          const placements = [];
-          for (let r = 0; r < grid.length; r++) {
-            for (let c = 0; c < grid[0].length; c++) {
-              const cell = grid[r][c];
-              if (Array.isArray(cell) && cell[0] === 'i') {
-                placements.push({
-                  r: r,
-                  c: c,
-                  idx: cell[1],
-                  inst: cell[2]
-                });
-              }
-            }
-          }
-          return {
-            placements: placements,
-            rows: grid.length,
-            cols: grid[0].length
-          };
-        }
-        
-        // 从压缩格式重建网格（仅在需要时使用）
-        function decompressGrid(compressed, originalGrid) {
-          const grid = originalGrid.map(r => r.slice());
-          for (const p of compressed.placements) {
-            grid[p.r][p.c] = ['i', p.idx, p.inst];
-          }
-          return grid;
-        }
-        
-        // 计算物品使用数量（用于去重）
-        function calculateUsedCounts(placements, shapesLength) {
-          const counts = Array(shapesLength).fill(0);
-          const instanceCounts = new Map();
-          
-          for (const p of placements) {
-            const key = \`\${p.idx}_\${p.inst}\`;
-            if (!instanceCounts.has(key)) {
-              instanceCounts.set(key, 0);
-              counts[p.idx]++;
-            }
-          }
-          return counts;
-        }
-        
-        // 生成解决方案的唯一键（基于物品使用情况）
-        function getSolutionKey(placements, shapesLength) {
-          const usedCounts = calculateUsedCounts(placements, shapesLength);
-          return usedCounts.join(',');
-        }
-        
-        // 针对单个组合的优化求解器
-        function solveCombination(grid, shapes, counts, combinationIndex, totalCombinations) {
-          let bestFilled = -1;
-          const solutionMap = new Map(); // 用于去重：key -> compressed solution
-          const rows = grid.length, cols = grid[0].length;
-          
-          function cloneGrid(g) { return g.map(r => r.slice()); }
-          
-          function backtrack(cur, remaining, placedCounter) {
-            // 检查是否需要取消计算
-            if (shouldCancel) {
-              return;
-            }
-            
-            const filled = countFilled(cur);
-            let remainingFree = 0; 
-            for (const row of cur) for (const c of row) if (c === 'o') remainingFree++;
-            
-            // 剪枝：如果当前填充数加上剩余空间都不如最佳结果，直接返回
-            if (filled + remainingFree < bestFilled) return;
+const ITEM_SHAPES = [
+    [[1, 1, 1], [1, 0, 0]],
+    [[0, 0, 0, 1], [1, 1, 1, 1]],
+    [[1, 1, 1, 1], [0, 1, 0, 0]],
+    [[1, 1], [1, 0]],
+    [[1, 1], [1, 1]],
+    [[1], [1]],
+    [[1], [1], [1]],
+    [[1, 0], [1, 0], [1, 0], [1, 1]],
+    [[0, 1], [0, 1], [1, 1], [0, 1]],
+    [[1, 1, 1]],
+    [[1]]
+];
 
-            const next = firstFreeCell(cur);
-            if (!next) {
-              if (filled >= bestFilled) {
+const MAX_SOLUTIONS_PER_WORKER = 10; // 限制每个Worker最多保留10个解决方案
+
+function area(shape) { return shape.flat().reduce((a, b) => a + (b ? 1 : 0), 0); }
+
+function computeFreeCells(grid) {
+    let n = 0; for (const row of grid) for (const c of row) if (c === 'o') n++; return n;
+}
+
+function firstFreeCell(grid,r,c) {
+    for (let i = r; i < grid.length; i++) {
+        for (let j = 0; j < grid[0].length; j++) {
+          if (i === r && j < c) continue;
+          // if (grid[i][j] === 'o') return [i, j];
+          return [i, j];
+        }
+    }
+    return null;
+}
+
+function canPlaceWithAnchor(grid, shape, r, c) {
+    const rows = grid.length, cols = grid[0].length;
+    const sh = shape.length, sw = shape[0].length;
+    for (let i = 0; i < sh; i++) {
+        for (let j = 0; j < sw; j++) {
+            if (shape[i][j] !== 1) continue;
+            const gr = r + i;
+            const gc = c + j;
+            if (gr < 0 || gc < 0 || gr >= rows || gc >= cols) return false;
+            if (grid[gr][gc] !== 'o') return false;
+        }
+    }
+    return true;
+}
+
+function placeWithAnchor(grid, shape, r, c, mark) {
+    for (let i = 0; i < shape.length; i++) {
+        for (let j = 0; j < shape[0].length; j++) {
+            if (shape[i][j] !== 1) continue;
+            const gr = r + i;
+            const gc = c + j;
+            grid[gr][gc] = mark;
+        }
+    }
+}
+
+function countFilled(grid) {
+    let n = 0; for (const row of grid) for (const c of row) if (Array.isArray(c)) n++; return n;
+}
+
+// 压缩网格表示：只存储物品放置信息，而不是完整网格
+function compressGrid(grid, originalGrid) {
+    const placements = [];
+    for (let r = 0; r < grid.length; r++) {
+        for (let c = 0; c < grid[0].length; c++) {
+            const cell = grid[r][c];
+            if (Array.isArray(cell) && cell[0] === 'i') {
+                placements.push({
+                    r: r,
+                    c: c,
+                    idx: cell[1],
+                    inst: cell[2]
+                });
+            }
+        }
+    }
+    return {
+        placements: placements,
+        rows: grid.length,
+        cols: grid[0].length
+    };
+}
+
+// 从压缩格式重建网格（仅在需要时使用）
+function decompressGrid(compressed, originalGrid) {
+    const grid = originalGrid.map(r => r.slice());
+    for (const p of compressed.placements) {
+        grid[p.r][p.c] = ['i', p.idx, p.inst];
+    }
+    return grid;
+}
+
+// 计算物品使用数量（用于去重）
+function calculateUsedCounts(placements, shapesLength) {
+    const counts = Array(shapesLength).fill(0);
+    const instanceCounts = new Map();
+
+    for (const p of placements) {
+        const key = p.idx + '_' + p.inst;
+        if (!instanceCounts.has(key)) {
+            instanceCounts.set(key, 0);
+            counts[p.idx]++;
+        }
+    }
+    return counts;
+}
+
+// 生成解决方案的唯一键（基于物品使用情况）
+function getSolutionKey(placements, shapesLength) {
+    const usedCounts = calculateUsedCounts(placements, shapesLength);
+    return usedCounts.join(',');
+}
+
+// 针对单个组合的优化求解器
+function solveCombination(grid, shapes, counts, combinationIndex, totalCombinations) {
+    let bestFilled = -1;
+    const solutionMap = new Map(); // 用于去重：key -> compressed solution
+    const rows = grid.length, cols = grid[0].length;
+
+    function cloneGrid(g) { return g.map(r => r.slice()); }
+
+    function backtrack(cur,old_r,old_c, remaining, placedCounter, is_skip = false) {
+        // 检查是否需要取消计算
+        if (shouldCancel) {
+            return;
+        }
+
+        const filled = countFilled(cur);
+        let remainingFree = 0;
+        for (let i = old_r; i < cur.length; i++) {
+          for (let j = 0; j < cur[0].length; j++) {
+            if (i === old_r && j < old_c) continue;
+            if (cur[i][j] === 'o') remainingFree++;
+          }
+        }
+        let remainingTotal = remaining.reduce((a, b, idx) => a + b*area(shapes[idx]), 0);
+        let remainingMin = Math.min(remainingFree, remainingTotal);
+        // 剪枝：如果当前填充数加上剩余空间都不如最佳结果，直接返回
+        if (filled + remainingFree < bestFilled) return;
+        if (is_skip && (filled + remainingMin <= bestFilled)) return;
+
+        const next = firstFreeCell(cur,old_r,old_c);
+        if (!next || !remaining.some(n=>n>0)) {
+            if (filled >= bestFilled) {
                 const compressed = compressGrid(cur, grid);
                 const solutionKey = getSolutionKey(compressed.placements, shapes.length);
-                
+
                 if (filled > bestFilled) {
-                  // 找到更好的解决方案，清空之前的结果
-                  bestFilled = filled;
-                  solutionMap.clear();
-                  solutionMap.set(solutionKey, { filled, compressed });
+                    // 找到更好的解决方案，清空之前的结果
+                    bestFilled = filled;
+                    solutionMap.clear();
+                    solutionMap.set(solutionKey, { filled, compressed });
                 } else if (filled === bestFilled && !solutionMap.has(solutionKey)) {
-                  // 相同质量的新解决方案
-                  solutionMap.set(solutionKey, { filled, compressed });
-                  
-                  // 限制解决方案数量，防止内存溢出
-                  if (solutionMap.size > MAX_SOLUTIONS_PER_WORKER) {
-                    // 随机移除一些解决方案，保持多样性
-                    const keys = Array.from(solutionMap.keys());
-                    const toRemove = keys.slice(0, Math.floor(MAX_SOLUTIONS_PER_WORKER / 2));
-                    toRemove.forEach(key => solutionMap.delete(key));
-                  }
-                }
-              }
-              return;
-            }
-            
-            const [r, c] = next;
-            let triedPlacement = false;
-            
-            // 按面积从大到小排序，优先放置大物品
-            const itemIndices = [];
-            for (let idx = 0; idx < shapes.length; idx++) {
-              if (remaining[idx] > 0) {
-                itemIndices.push({ idx, area: area(shapes[idx]) });
-              }
-            }
-            itemIndices.sort((a, b) => b.area - a.area);
-            
-            for (const { idx } of itemIndices) {
-              const shape = shapes[idx];
-              
-              for (let oi = 0; oi < shape.length; oi++) {
-                for (let oj = 0; oj < shape[0].length; oj++) {
-                  if (shape[oi][oj] !== 1) continue;
-                  if (!canPlaceWithAnchor(cur, shape, r, c, oi, oj)) continue;
-                  
-                  triedPlacement = true;
-                  const mark = ['i', idx, placedCounter[idx]];
-                  placeWithAnchor(cur, shape, r, c, oi, oj, mark);
-                  remaining[idx] -= 1;
-                  placedCounter[idx] += 1;
+                    // 相同质量的新解决方案
+                    solutionMap.set(solutionKey, { filled, compressed });
 
-                  backtrack(cur, remaining, placedCounter);
-
-                  placeWithAnchor(cur, shape, r, c, oi, oj, 'o');
-                  remaining[idx] += 1;
-                  placedCounter[idx] -= 1;
+                    // 限制解决方案数量，防止内存溢出
+                    if (solutionMap.size > MAX_SOLUTIONS_PER_WORKER) {
+                        // 随机移除一些解决方案，保持多样性
+                        const keys = Array.from(solutionMap.keys());
+                        const toRemove = keys.slice(0, Math.floor(MAX_SOLUTIONS_PER_WORKER / 2));
+                        toRemove.forEach(key => solutionMap.delete(key));
+                    }
                 }
-              }
             }
-            
-            // 如果无法放置任何物品，将当前位置标记为障碍并继续
-            if (!triedPlacement) {
-              cur[r][c] = 'x';
-              backtrack(cur, remaining, placedCounter);
-              cur[r][c] = 'o';
-            }
-          }
-          
-          backtrack(grid.map(r => r.slice()), counts.slice(), Array(counts.length).fill(0));
-          
-          // 转换压缩的解决方案为最终格式
-          const solutions = Array.from(solutionMap.values()).map(sol => ({
-            filled: sol.filled,
-            compressed: sol.compressed
-          }));
-          
-          return { 
-            bestFilled, 
-            solutions, 
-            combinationIndex,
-            counts: counts.slice()
-          };
+            return;
         }
-        
-        let currentSolveId = null;
-        let shouldCancel = false;
-        
-        self.onmessage = function(e) {
-          const { type, grid, shapes, counts, combinationIndex, totalCombinations, solveId } = e.data;
-          
-          if (type === 'solveCombination') {
-            currentSolveId = solveId;
-            shouldCancel = false;
-            
-            try {
-              const result = solveCombination(grid, shapes, counts, combinationIndex, totalCombinations);
-              
-              // 检查是否在计算过程中被取消
-              if (shouldCancel && currentSolveId === solveId) {
-                self.postMessage({ 
-                  type: 'result', 
-                  result: {
-                    bestFilled: -1,
-                    solutions: [],
-                    combinationIndex: combinationIndex,
-                    counts: counts,
-                    cancelled: true
-                  }, 
-                  solveId 
+
+        const [r, c] = next;
+        let triedPlacement = false;
+
+        for (const idx in remaining) {
+            if(remaining[idx] <= 0) continue;
+            const shape = shapes[idx];
+            if (!canPlaceWithAnchor(cur, shape, r, c)) continue;
+
+            triedPlacement = true;
+            const mark = ['i', idx, placedCounter[idx]];
+            placeWithAnchor(cur, shape, r, c, mark);
+            remaining[idx] -= 1;
+            placedCounter[idx] += 1;
+
+            backtrack(cur,r,c, remaining, placedCounter);
+
+            placeWithAnchor(cur, shape, r, c, 'o');
+            remaining[idx] += 1;
+            placedCounter[idx] -= 1;
+        }
+        backtrack(cur,r,c+1, remaining, placedCounter, !triedPlacement);
+    }
+    backtrack(grid.map(r => r.slice()),0,0, counts.slice(), Array(counts.length).fill(0));
+
+    // 转换压缩的解决方案为最终格式
+    const solutions = Array.from(solutionMap.values()).map(sol => ({
+        filled: sol.filled,
+        compressed: sol.compressed
+    }));
+
+    return {
+        bestFilled,
+        solutions,
+        combinationIndex
+    };
+}
+
+let currentSolveId = null;
+let shouldCancel = false;
+
+self.onmessage = function (e) {
+    const { type, grid, shapes, counts, combinationIndex, totalCombinations, solveId } = e.data;
+
+    if (type === 'solveCombination') {
+        currentSolveId = solveId;
+        shouldCancel = false;
+
+        try {
+            const result = solveCombination(grid, shapes, counts, combinationIndex, totalCombinations);
+
+            // 检查是否在计算过程中被取消
+            if (shouldCancel && currentSolveId === solveId) {
+                self.postMessage({
+                    type: 'result',
+                    result: {
+                        bestFilled: -1,
+                        solutions: [],
+                        combinationIndex: combinationIndex,
+                        counts: counts,
+                        cancelled: true
+                    },
+                    solveId
                 });
                 return;
-              }
-              
-              // 只传输压缩的解决方案，减少数据传输量
-              const compactResult = {
+            }
+
+            // 只传输压缩的解决方案，减少数据传输量
+            const compactResult = {
                 bestFilled: result.bestFilled,
                 solutions: result.solutions, // 已经是压缩格式
                 combinationIndex: result.combinationIndex,
                 counts: result.counts
-              };
-              
-              self.postMessage({ type: 'result', result: compactResult, solveId });
-            } catch (error) {
-              self.postMessage({ type: 'error', error: error.message, solveId });
-            }
-          } else if (type === 'cancel') {
-            if (currentSolveId === solveId) {
-              shouldCancel = true;
-              console.log('Worker收到取消信号，solveId: ' + solveId);
-            }
-          }
-        };
+            };
+
+            self.postMessage({ type: 'result', result: compactResult, solveId });
+        } catch (error) {
+            console.log(error)
+            self.postMessage({ type: 'error', error: error.message, solveId });
+        }
+    } else if (type === 'cancel') {
+        if (currentSolveId === solveId) {
+            shouldCancel = true;
+            console.log('Worker收到取消信号，solveId: ' + solveId);
+        }
+    }
+};
       `;
       
       const blob = new Blob([workerCode], { type: 'application/javascript' });
@@ -1179,8 +1138,8 @@
                 if (result.bestFilled > currentBestFilled) {
                   const oldBestFilled = currentBestFilled;
                   currentBestFilled = result.bestFilled;
-                  currentBestCombination = combination.slice();
-                  console.log(`🎯 更新全局最优解：填充数 ${oldBestFilled} → ${currentBestFilled}，组合 [${combination.join(',')}]`);
+                  console.log(JSON.parse(JSON.stringify(result)))
+                  console.log(`🎯 更新全局最优解：填充数 ${oldBestFilled} → ${currentBestFilled}`);
                   
                   // 立即取消当前批次中理论上不可能超越新最优解的Worker
                   let cancelledWorkers = 0;
