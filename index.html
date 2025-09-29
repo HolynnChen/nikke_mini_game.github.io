@@ -363,6 +363,25 @@
       position: relative;
     }
 
+    /* 拖动矩形选择功能样式 */
+    .grid-container {
+      position: relative;
+      display: inline-block;
+    }
+
+    .selection-overlay {
+      position: absolute;
+      border: 2px dashed var(--primary);
+      background: rgba(59, 130, 246, 0.1);
+      pointer-events: none;
+      z-index: 5;
+      display: none;
+    }
+
+    .grid {
+      user-select: none;
+    }
+
     @media (max-width: 1200px) {
       .container {
         grid-template-columns: 1fr 1fr;
@@ -417,7 +436,10 @@
     <div class="container">
       <div class="panel">
         <h3>背包 9x9</h3>
-        <div id="grid" class="grid"></div>
+        <div class="grid-container">
+          <div id="grid" class="grid"></div>
+          <div id="selectionOverlay" class="selection-overlay"></div>
+        </div>
         <div class="controls">
           <button id="clear">重置背包状态</button>
           <button id="fill">全部可用</button>
@@ -541,6 +563,7 @@
     const fillBtn = document.getElementById('fill');
     const clearCountsBtn = document.getElementById('clearCounts');
     const calculateBtn = document.getElementById('calculate');
+    const selectionOverlay = document.getElementById('selectionOverlay');
 
     clearBtn.onclick = () => {
       pkg = Array.from({ length: SIZE }, (_, i) => Array.from({ length: SIZE }, (_, j) => i >= 2 && i <= 6 && j >= 3 && j <= 5 ? 'o' : 'x'));
@@ -561,23 +584,113 @@
       requestSolve();
     };
 
+    // 拖动选择相关变量
+    let isDragging = false;
+    let dragStartCell = null;
+    let dragCurrentCell = null;
+
     function renderGrid() {
       gridEl.innerHTML = '';
-      gridEl.style.gridTemplateColumns = `repeat(${SIZE}, 28px)`;
+      gridEl.style.gridTemplateColumns = `repeat(${SIZE}, 30px)`;
+      
       for (let r = 0; r < SIZE; r++) {
         for (let c = 0; c < SIZE; c++) {
           const div = document.createElement('div');
           const v = pkg[r][c];
           div.className = 'cell ' + (v === 'x' ? 'block' : 'free');
           div.textContent = v === 'x' ? 'x' : '';
-          div.onclick = () => {
-            pkg[r][c] = pkg[r][c] === 'x' ? 'o' : 'x';
-            renderGrid();
-            saveState();
+          div.dataset.row = r;
+          div.dataset.col = c;
+          
+          // 单击切换功能
+          div.onclick = (e) => {
+            // 如果刚刚完成拖动，不执行单击
+            if (e.detail === 1 && !isDragging) {
+              setTimeout(() => {
+                if (!isDragging) {
+                  pkg[r][c] = pkg[r][c] === 'x' ? 'o' : 'x';
+                  renderGrid();
+                  saveState();
+                }
+              }, 200);
+            }
           };
+          
+          // 拖动开始
+          div.onmousedown = (e) => {
+            e.preventDefault();
+            isDragging = true;
+            dragStartCell = { row: r, col: c };
+            dragCurrentCell = { row: r, col: c };
+            updateSelectionOverlay();
+          };
+          
+          // 拖动过程中
+          div.onmouseenter = () => {
+            if (isDragging) {
+              dragCurrentCell = { row: r, col: c };
+              updateSelectionOverlay();
+            }
+          };
+          
           gridEl.appendChild(div);
         }
       }
+      
+      // 全局鼠标释放事件
+      document.onmouseup = () => {
+        if (isDragging) {
+          applySelection();
+          isDragging = false;
+          dragStartCell = null;
+          dragCurrentCell = null;
+          selectionOverlay.style.display = 'none';
+        }
+      };
+    }
+
+    // 更新选择遮罩层
+    function updateSelectionOverlay() {
+      if (!isDragging || !dragStartCell || !dragCurrentCell) return;
+      
+      const cellSize = 30; // 包括边框的格子大小
+      const gap = 6; // 网格间距
+      
+      const startRow = Math.min(dragStartCell.row, dragCurrentCell.row);
+      const endRow = Math.max(dragStartCell.row, dragCurrentCell.row);
+      const startCol = Math.min(dragStartCell.col, dragCurrentCell.col);
+      const endCol = Math.max(dragStartCell.col, dragCurrentCell.col);
+      
+      const left = startCol * cellSize + startCol * gap;
+      const top = startRow * cellSize + startRow * gap;
+      const width = (endCol - startCol + 1) * cellSize + (endCol - startCol) * gap;
+      const height = (endRow - startRow + 1) * cellSize + (endRow - startRow) * gap;
+      
+      selectionOverlay.style.left = left + 'px';
+      selectionOverlay.style.top = top + 'px';
+      selectionOverlay.style.width = width + 'px';
+      selectionOverlay.style.height = height + 'px';
+      selectionOverlay.style.display = 'block';
+    }
+
+    // 应用选择区域
+    function applySelection() {
+      if (!dragStartCell || !dragCurrentCell) return;
+      
+      const startRow = Math.min(dragStartCell.row, dragCurrentCell.row);
+      const endRow = Math.max(dragStartCell.row, dragCurrentCell.row);
+      const startCol = Math.min(dragStartCell.col, dragCurrentCell.col);
+      const endCol = Math.max(dragStartCell.col, dragCurrentCell.col);
+      
+      // 将选择区域内的所有格子设置为可用
+      for (let r = startRow; r <= endRow; r++) {
+        for (let c = startCol; c <= endCol; c++) {
+          pkg[r][c] = 'o';
+        }
+      }
+      
+      renderGrid();
+      saveState();
     }
 
     function renderShapes() {
