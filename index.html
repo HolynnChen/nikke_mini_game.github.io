@@ -488,6 +488,443 @@
   </div>
 
   <script>
+    // Worker 池管理器 - 内联版本
+    class WorkerPool {
+      constructor(workerScript, maxWorkers = null) {
+        this.workerScript = workerScript;
+        this.maxWorkers = maxWorkers || navigator.hardwareConcurrency || 4;
+        this.workers = [];
+        this.workerStates = new Map(); // workerId -> 'available' | 'busy' | 'initializing'
+        this.isInitialized = false;
+        
+        // 动态任务分配相关
+        this.taskQueue = [];
+        this.currentTaskIndex = 0;
+        this.totalTasks = 0;
+        this.completedTasks = 0;
+        this.allResults = [];
+        this.globalProgressCallback = null;
+        this.taskResolve = null;
+        this.taskReject = null;
+        this.isCancelled = false;
+        this.taskId = 0;
+        this.pendingTasks = new Map();
+      }
+      // 初始化 Worker 池
+      async init() {
+        if (this.isInitialized) return;
+        
+        console.log(`初始化 Worker 池，创建 ${this.maxWorkers} 个 Worker`);
+        
+        // 创建 Worker 实例
+        for (let i = 0; i < this.maxWorkers; i++) {
+          const worker = new Worker(this.workerScript, { type: 'module' });
+          worker.workerId = i;
+          
+          // 设置消息处理器
+          worker.onmessage = (e) => this.handleWorkerMessage(worker, e);
+          worker.onerror = (error) => this.handleWorkerError(worker, error);
+          
+          this.workers.push(worker);
+          this.workerStates.set(i, 'initializing');
+        }
+        
+        // 初始化所有 Worker 中的 WASM 模块
+        const initPromises = this.workers.map(worker => {
+          return new Promise((resolve, reject) => {
+            const taskId = ++this.taskId;
+            this.pendingTasks.set(taskId, { resolve, reject, type: 'init' });
+            
+            worker.postMessage({
+              type: 'init',
+              taskId
+            });
+          });
+        });
+        
+        await Promise.all(initPromises);
+        
+        // 将所有 Worker 标记为可用
+        for (let i = 0; i < this.maxWorkers; i++) {
+          this.workerStates.set(i, 'available');
+        }
+        
+        this.isInitialized = true;
+        console.log('Worker 池初始化完成');
+      }
+      
+      // 处理 Worker 消息
+      handleWorkerMessage(worker, e) {
+        const { type, taskId, ...data } = e.data;
+        const task = this.pendingTasks.get(taskId);
+        
+        switch (type) {
+          case 'init_complete':
+            if (task) {
+              this.pendingTasks.delete(taskId);
+              if (data.success) {
+                task.resolve();
+              } else {
+                task.reject(new Error('Worker 初始化失败'));
+              }
+            }
+            break;
+            
+          case 'single_task_complete':
+            this.handleSingleTaskComplete(worker, taskId, data);
+            break;
+            
+          case 'cancel_complete':
+            if (task) {
+              this.pendingTasks.delete(taskId);
+              this.setWorkerAvailable(worker);
+              task.resolve();
+            }
+            break;
+            
+          case 'error':
+            if (task) {
+              this.pendingTasks.delete(taskId);
+              this.setWorkerAvailable(worker);
+              task.reject(new Error(data.error));
+            }
+            break;
+        }
+      }
+      
+      // 处理单个任务完成
+      handleSingleTaskComplete(worker, taskId, data) {
+        const task = this.pendingTasks.get(taskId);
+        if (!task) return;
+        
+        this.pendingTasks.delete(taskId);
+        
+        // 收集结果
+        if (data.results && data.results.length > 0) {
+          this.allResults.push(...data.results);
+        }
+        
+        // 更新进度
+        this.completedTasks++;
+        if (this.globalProgressCallback) {
+          const progress = (this.completedTasks / this.totalTasks) * 100;
+          this.globalProgressCallback(progress);
+        }
+        
+        console.log(`Worker ${worker.workerId} 完成任务，进度: ${this.completedTasks}/${this.totalTasks}`);
+        
+        // 调用动态剪枝回调（如果存在）
+        if (this.dynamicPruningCallback && data.results && data.results.length > 0) {
+          const prunedCount = this.dynamicPruningCallback(data.results);
+          if (prunedCount > 0) {
+            console.log(`🔥 动态剪枝：移除了 ${prunedCount} 个待处理任务`);
+            // 更新总任务数
+            this.totalTasks -= prunedCount;
+          }
+        }
+        
+        // 检查是否所有任务都完成了
+        if (this.completedTasks >= this.totalTasks) {
+          console.log(`所有任务完成，共收集到 ${this.allResults.length} 个结果`);
+          if (this.taskResolve) {
+            this.taskResolve(this.allResults);
+            this.taskResolve = null;
+            this.taskReject = null;
+          }
+          this.setWorkerAvailable(worker);
+          return;
+        }
+        
+        // 为这个 Worker 分配下一个任务
+        this.assignNextTask(worker);
+      }
+      
+      // 处理 Worker 错误
+      handleWorkerError(worker, error) {
+        console.error(`Worker ${worker.workerId} 出错:`, error);
+        
+        // 如果是在动态任务分配过程中出错，尝试分配下一个任务
+        if (this.currentTaskIndex < this.totalTasks && !this.isCancelled) {
+          // 不需要先释放 Worker，直接分配下一个任务
+          this.assignNextTask(worker);
+        } else {
+          // 如果没有更多任务，则将 Worker 设为可用
+          this.setWorkerAvailable(worker);
+        }
+      }
+      
+      // 设置 Worker 为可用状态
+      setWorkerAvailable(worker) {
+        if (!worker || typeof worker.workerId === 'undefined') {
+          console.warn('setWorkerAvailable: worker 参数无效');
+          return;
+        }
+        
+        this.workerStates.set(worker.workerId, 'available');
+        // console.log(`Worker ${worker.workerId} 设为可用状态`);
+      }
+      
+      // 设置 Worker 为忙碌状态
+      setWorkerBusy(worker) {
+        if (!worker || typeof worker.workerId === 'undefined') {
+          console.warn('setWorkerBusy: worker 参数无效');
+          return;
+        }
+        
+        this.workerStates.set(worker.workerId, 'busy');
+        // console.log(`Worker ${worker.workerId} 设为忙碌状态`);
+      }
+      
+      // 检查 Worker 是否可用
+      isWorkerAvailable(worker) {
+        if (!worker || typeof worker.workerId === 'undefined') {
+          return false;
+        }
+        
+        return this.workerStates.get(worker.workerId) === 'available';
+      }
+      
+      // 获取下一个可用的 Worker
+      getNextAvailableWorker() {
+        for (const worker of this.workers) {
+          if (this.isWorkerAvailable(worker)) {
+            return worker;
+          }
+        }
+        return null;
+      }
+      
+      // 获取可用 Worker 数量
+      getAvailableWorkerCount() {
+        let count = 0;
+        for (const [workerId, state] of this.workerStates) {
+          if (state === 'available') {
+            count++;
+          }
+        }
+        return count;
+      }
+      
+      // 为 Worker 分配下一个任务
+      assignNextTask(worker) {
+        // 检查 Worker 对象是否有效
+        if (!worker) {
+          console.error('assignNextTask: worker 参数为空');
+          return;
+        }
+        
+        // 确保 workerId 存在
+        if (typeof worker.workerId === 'undefined') {
+          // 尝试从 workers 数组中找到对应的 workerId
+          const workerIndex = this.workers.indexOf(worker);
+          if (workerIndex !== -1) {
+            worker.workerId = workerIndex;
+          } else {
+            console.warn('assignNextTask: 无法确定 worker ID，使用默认值');
+            worker.workerId = 'unknown';
+          }
+        }
+        
+        // 检查是否已取消
+        if (this.isCancelled) {
+          this.setWorkerAvailable(worker);
+          return;
+        }
+        
+        // 检查是否还有任务
+        if (this.currentTaskIndex >= this.taskQueue.length) {
+          this.setWorkerAvailable(worker);
+          return;
+        }
+        
+        // 获取下一个任务
+        const task = this.taskQueue[this.currentTaskIndex];
+        this.currentTaskIndex++;
+        
+        // 标记 Worker 为忙碌
+        this.setWorkerBusy(worker);
+        
+        // console.log(`Worker ${worker.workerId} 开始处理任务 ${this.currentTaskIndex}/${this.totalTasks}`);
+        
+        // 创建任务记录
+        const taskId = ++this.taskId;
+        this.pendingTasks.set(taskId, { 
+          type: 'single_task',
+          worker: worker,
+          taskIndex: this.currentTaskIndex - 1
+        });
+        
+        // 发送单个任务
+        worker.postMessage({
+          type: 'solve_single',
+          data: {
+            combination: task.combination,
+            grid: task.grid,
+            shapes: task.shapes,
+            originalIndex: task.originalIndex
+          },
+          taskId
+        });
+      }
+      
+      // 动态任务分配 - 主要接口
+      async solveDynamic(combinations, grid, shapes, progressCallback, dynamicPruningCallback) {
+        if (!this.isInitialized) {
+          await this.init();
+        }
+        
+        if (combinations.length === 0) {
+          return [];
+        }
+        
+        console.log(`开始动态任务分配，总共 ${combinations.length} 个组合`);
+        
+        // 重置状态
+        this.currentTaskIndex = 0;
+        this.totalTasks = combinations.length;
+        this.completedTasks = 0;
+        this.allResults = [];
+        this.globalProgressCallback = progressCallback;
+        this.dynamicPruningCallback = dynamicPruningCallback;
+        this.isCancelled = false;
+        
+        // 创建任务队列
+        this.taskQueue = combinations.map((combination, index) => ({
+          combination: combination.combination,
+          originalIndex: combination.originalIndex,
+          grid: grid,
+          shapes: shapes,
+          taskIndex: index
+        }));
+        
+        return new Promise((resolve, reject) => {
+          this.taskResolve = resolve;
+          this.taskReject = reject;
+          
+          // 启动所有可用的 Worker
+          const availableWorkerCount = this.getAvailableWorkerCount();
+          const workersToStart = Math.min(availableWorkerCount, this.taskQueue.length);
+          console.log(`准备启动 ${workersToStart} 个 Worker，可用 Worker 数量: ${availableWorkerCount}`);
+          
+          let startedWorkers = 0;
+          for (const worker of this.workers) {
+            if (startedWorkers >= workersToStart) break;
+            
+            if (this.isWorkerAvailable(worker)) {
+              // console.log(`启动 Worker ${worker.workerId} 处理任务`);
+              this.assignNextTask(worker);
+              startedWorkers++;
+            }
+          }
+          
+          if (startedWorkers === 0) {
+            console.warn('没有可用的 Worker 来处理任务');
+            reject(new Error('没有可用的 Worker'));
+          }
+        });
+      }
+      
+      // 取消所有任务
+      async cancelAll() {
+        console.log('取消所有 Worker 任务 - 直接终止并重建');
+        
+        try {
+          // 设置取消标记
+          this.isCancelled = true;
+          
+          // 如果有待解决的 Promise，优雅地解决它而不是拒绝
+          if (this.taskResolve) {
+            console.log('优雅地结束当前计算任务');
+            this.taskResolve([]); // 返回空结果而不是抛出异常
+            this.taskResolve = null;
+            this.taskReject = null;
+          }
+          
+          // 直接终止所有 Worker
+          this.workers.forEach((worker, index) => {
+            try {
+              console.log(`终止 Worker ${index}`);
+              worker.terminate();
+            } catch (error) {
+              console.warn(`终止 Worker ${index} 时出现警告:`, error.message);
+            }
+          });
+          
+          // 清理所有状态
+          this.workers = [];
+          this.workerStates.clear();
+          this.pendingTasks.clear();
+          this.currentTaskIndex = 0;
+          this.totalTasks = 0;
+          this.completedTasks = 0;
+          this.allResults = [];
+          this.taskQueue = [];
+          this.taskId = 0;
+          this.globalProgressCallback = null;
+          this.dynamicPruningCallback = null;
+          this.isInitialized = false;
+          
+          // 重新初始化 Worker 池
+          console.log('重新初始化 Worker 池');
+          await this.init();
+          
+          console.log('Worker 池已重建完成');
+          return { success: true, message: '计算已取消，Worker 池已重建' };
+          
+        } catch (error) {
+          console.error('取消任务过程中出现错误:', error);
+          // 即使出错也要确保状态被清理
+          this.workers = [];
+          this.workerStates.clear();
+          this.pendingTasks.clear();
+          this.isInitialized = false;
+          this.isCancelled = false;
+          
+          return { success: false, message: '取消任务时出现错误，但状态已清理', error: error.message };
+        }
+      }
+      
+      // 销毁 Worker 池
+      destroy() {
+        console.log('销毁 Worker 池');
+        
+        // 如果有待解决的 Promise，拒绝它
+        if (this.taskReject) {
+          this.taskReject(new Error('Worker 池已销毁'));
+          this.taskResolve = null;
+          this.taskReject = null;
+        }
+        
+        // 终止所有 Worker
+        this.workers.forEach((worker, index) => {
+          console.log(`销毁 Worker ${index}`);
+          worker.terminate();
+        });
+        
+        // 清理所有状态
+        this.workers = [];
+        this.workerStates.clear();
+        this.pendingTasks.clear();
+        this.taskQueue = [];
+        this.currentTaskIndex = 0;
+        this.totalTasks = 0;
+        this.completedTasks = 0;
+        this.allResults = [];
+        this.taskId = 0;
+        this.globalProgressCallback = null;
+        this.dynamicPruningCallback = null;
+        this.isInitialized = false;
+        this.isCancelled = false;
+        
+        console.log('Worker 池已完全销毁');
+      }
+    }
+
+    // 导出 WorkerPool 类
+    window.WorkerPool = WorkerPool;
+  </script>
+  
+  <script type="module">
     const MAX = 9;
     let SIZE = 9;
 
@@ -586,8 +1023,10 @@
 
     // 拖动选择相关变量
     let isDragging = false;
+    let isMouseDown = false;
     let dragStartCell = null;
     let dragCurrentCell = null;
+    let hasMoved = false; // 标记是否真正发生了拖动
 
     function renderGrid() {
       gridEl.innerHTML = '';
@@ -604,32 +1043,37 @@
           
           // 单击切换功能
           div.onclick = (e) => {
-            // 如果刚刚完成拖动，不执行单击
-            if (e.detail === 1 && !isDragging) {
-              setTimeout(() => {
-                if (!isDragging) {
-                  pkg[r][c] = pkg[r][c] === 'x' ? 'o' : 'x';
-                  renderGrid();
-                  saveState();
-                }
-              }, 200);
+            // 只有在没有发生拖动的情况下才执行单击切换
+            if (!hasMoved) {
+              pkg[r][c] = pkg[r][c] === 'x' ? 'o' : 'x';
+              renderGrid();
+              saveState();
             }
           };
           
-          // 拖动开始
+          // 鼠标按下
           div.onmousedown = (e) => {
             e.preventDefault();
-            isDragging = true;
+            isMouseDown = true;
+            hasMoved = false;
             dragStartCell = { row: r, col: c };
             dragCurrentCell = { row: r, col: c };
-            updateSelectionOverlay();
           };
           
           // 拖动过程中
           div.onmouseenter = () => {
-            if (isDragging) {
-              dragCurrentCell = { row: r, col: c };
-              updateSelectionOverlay();
+            if (isMouseDown) {
+              // 检查是否真正移动到了不同的格子
+              if (!dragCurrentCell || dragCurrentCell.row !== r || dragCurrentCell.col !== c) {
+                if (!isDragging) {
+                  // 第一次移动，开始拖动模式
+                  isDragging = true;
+                  hasMoved = true;
+                  updateSelectionOverlay();
+                }
+                dragCurrentCell = { row: r, col: c };
+                updateSelectionOverlay();
+              }
             }
           };
           
@@ -639,13 +1083,21 @@
       
       // 全局鼠标释放事件
       document.onmouseup = () => {
-        if (isDragging) {
+        if (isDragging && hasMoved) {
           applySelection();
-          isDragging = false;
-          dragStartCell = null;
-          dragCurrentCell = null;
-          selectionOverlay.style.display = 'none';
         }
+        
+        // 重置所有状态
+        isDragging = false;
+        isMouseDown = false;
+        dragStartCell = null;
+        dragCurrentCell = null;
+        selectionOverlay.style.display = 'none';
+        
+        // 延迟重置hasMoved，让click事件能够正确判断
+        setTimeout(() => {
+          hasMoved = false;
+        }, 10);
       };
     }
 
@@ -767,12 +1219,162 @@
       });
     }
 
-    // 新架构：三阶段求解系统
-    let workerPool = [];
+    // 创建内联的 Worker 脚本
+    const workerScript = `
+// Worker 脚本：在独立线程中调用 WASM 求解器
+let wasmSolver = null;
+let isInitialized = false;
+
+// 初始化 WASM 模块
+async function initWasm() {
+  if (wasmSolver) return wasmSolver;
+  
+  try {
+    // 动态导入 WASM 模块 - 使用绝对路径
+    const wasmModule = await import(self.location.origin + '/pkg/packing_solver.js');
+    await wasmModule.default();
+    wasmSolver = new wasmModule.WasmPackingSolver();
+    isInitialized = true;
+    // console.log('Worker WASM 求解器初始化成功');
+    return wasmSolver;
+  } catch (error) {
+    console.error('Worker WASM 初始化失败:', error);
+    throw error;
+  }
+}
+
+// 处理主线程发送的消息
+self.onmessage = async function(e) {
+  const { type, data, taskId } = e.data;
+  
+  try {
+    switch (type) {
+      case 'init':
+        // 初始化 WASM 模块
+        await initWasm();
+        self.postMessage({
+          type: 'init_complete',
+          taskId,
+          success: true
+        });
+        break;
+        
+      case 'solve_single': {
+        // 处理单个组合任务
+        if (!isInitialized) {
+          await initWasm();
+        }
+        
+        const { combination, grid: singleGrid, shapes: singleShapes, originalIndex } = data;
+        
+        try {
+          // 重置取消标志
+          wasmSolver.set_cancel(false);
+          
+          // 直接调用 WASM 求解器，传递独立参数
+          const result = wasmSolver.solve_combination(
+            singleGrid,
+            singleShapes, 
+            combination,
+            originalIndex
+          );
+          
+          const taskResult = {
+            bestFilled: result.best_filled,
+            solutions: result.solutions,
+            combinationIndex: result.combination_index,
+            counts: result.counts,
+            cancelled: result.cancelled
+          };
+          
+          // 发送单个任务完成结果
+          self.postMessage({
+            type: 'single_task_complete',
+            taskId,
+            results: [taskResult]
+          });
+          
+        } catch (error) {
+          console.error(\`Worker 求解组合 \${originalIndex} 时出错:\`, error);
+          
+          const errorResult = {
+            bestFilled: -1,
+            solutions: [],
+            combinationIndex: originalIndex,
+            counts: combination,
+            cancelled: false,
+            error: error.message
+          };
+          
+          self.postMessage({
+            type: 'single_task_complete',
+            taskId,
+            results: [errorResult]
+          });
+        }
+        break;
+      }
+      case 'cancel':
+        // 取消当前计算
+        if (wasmSolver) {
+          wasmSolver.set_cancel(true);
+        }
+        self.postMessage({
+          type: 'cancel_complete',
+          taskId
+        });
+        break;
+        
+      default:
+        console.warn('Worker 收到未知消息类型:', type);
+    }
+  } catch (error) {
+    console.error('Worker 处理消息时出错:', error);
+    self.postMessage({
+      type: 'error',
+      taskId,
+      error: error.message
+    });
+  }
+};
+    `;
+
+    // 创建 Blob URL 用于 Worker
+    const workerBlob = new Blob([workerScript], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(workerBlob);
+
+    // 多 Worker WASM 架构
+    let workerPool = null;
     let currentSolveId = 0;
-    const MAX_WORKERS = navigator.hardwareConcurrency || 4; // 使用CPU核数，默认4个
+    const MAX_WORKERS = navigator.hardwareConcurrency || 1; // 使用CPU核数，默认1个
     let isCalculating = false; // 标记是否正在计算
     let currentCalculationPromise = null; // 当前计算的Promise，用于取消
+    let workerPoolInitPromise = null; // Worker 池初始化的 Promise
+    
+    // 初始化 Worker 池
+    async function initWorkerPool() {
+      if (workerPool) return workerPool;
+      
+      // 如果已经在初始化中，返回同一个 Promise
+      if (workerPoolInitPromise) {
+        return workerPoolInitPromise;
+      }
+      
+      workerPoolInitPromise = (async () => {
+        try {
+          workerPool = new WorkerPool(workerUrl, MAX_WORKERS);
+          await workerPool.init();
+          console.log(`Worker 池初始化成功，使用 ${MAX_WORKERS} 个 Worker`);
+          return workerPool;
+        } catch (error) {
+          console.error('Worker 池初始化失败:', error);
+          workerPoolInitPromise = null; // 重置，允许重试
+          throw error;
+        }
+      })();
+      
+      return workerPoolInitPromise;
+    }
     
     // 第一阶段：生成所有饱和的物品组合（无法再添加任何物品的组合）
     function generateValidCombinations(shapes, maxCounts, freeArea) {
@@ -816,289 +1418,32 @@
       return validCombinations;
     }
     
-    // 创建单个Worker用于处理特定组合
-    function createCombinationWorker() {
-      const workerCode = `
-const ITEM_SHAPES = [
-    [[1, 1, 1], [1, 0, 0]],
-    [[0, 0, 0, 1], [1, 1, 1, 1]],
-    [[1, 1, 1, 1], [0, 1, 0, 0]],
-    [[1, 1], [1, 0]],
-    [[1, 1], [1, 1]],
-    [[1], [1]],
-    [[1], [1], [1]],
-    [[1, 0], [1, 0], [1, 0], [1, 1]],
-    [[0, 1], [0, 1], [1, 1], [0, 1]],
-    [[1, 1, 1]],
-    [[1]]
-];
-
-const MAX_SOLUTIONS_PER_WORKER = 10; // 限制每个Worker最多保留10个解决方案
-
-function area(shape) { return shape.flat().reduce((a, b) => a + (b ? 1 : 0), 0); }
-
-function computeFreeCells(grid) {
-    let n = 0; for (const row of grid) for (const c of row) if (c === 'o') n++; return n;
-}
-
-function firstFreeCell(grid,r,c) {
-    for (let i = r; i < grid.length; i++) {
-        for (let j = 0; j < grid[0].length; j++) {
-          if (i === r && j < c) continue;
-          // if (grid[i][j] === 'o') return [i, j];
-          return [i, j];
-        }
-    }
-    return null;
-}
-
-function canPlaceWithAnchor(grid, shape, r, c) {
-    const rows = grid.length, cols = grid[0].length;
-    const sh = shape.length, sw = shape[0].length;
-    for (let i = 0; i < sh; i++) {
-        for (let j = 0; j < sw; j++) {
-            if (shape[i][j] !== 1) continue;
-            const gr = r + i;
-            const gc = c + j;
-            if (gr < 0 || gc < 0 || gr >= rows || gc >= cols) return false;
-            if (grid[gr][gc] !== 'o') return false;
-        }
-    }
-    return true;
-}
-
-function placeWithAnchor(grid, shape, r, c, mark) {
-    for (let i = 0; i < shape.length; i++) {
-        for (let j = 0; j < shape[0].length; j++) {
-            if (shape[i][j] !== 1) continue;
-            const gr = r + i;
-            const gc = c + j;
-            grid[gr][gc] = mark;
-        }
-    }
-}
-
-function countFilled(grid) {
-    let n = 0; for (const row of grid) for (const c of row) if (Array.isArray(c)) n++; return n;
-}
-
-// 压缩网格表示：只存储物品放置信息，而不是完整网格
-function compressGrid(grid, originalGrid) {
-    const placements = [];
-    for (let r = 0; r < grid.length; r++) {
-        for (let c = 0; c < grid[0].length; c++) {
-            const cell = grid[r][c];
-            if (Array.isArray(cell) && cell[0] === 'i') {
-                placements.push({
-                    r: r,
-                    c: c,
-                    idx: cell[1],
-                    inst: cell[2]
-                });
-            }
-        }
-    }
-    return {
-        placements: placements,
-        rows: grid.length,
-        cols: grid[0].length
-    };
-}
-
-// 从压缩格式重建网格（仅在需要时使用）
-function decompressGrid(compressed, originalGrid) {
-    const grid = originalGrid.map(r => r.slice());
-    for (const p of compressed.placements) {
-        grid[p.r][p.c] = ['i', p.idx, p.inst];
-    }
-    return grid;
-}
-
-// 计算物品使用数量（用于去重）
-function calculateUsedCounts(placements, shapesLength) {
-    const counts = Array(shapesLength).fill(0);
-    const instanceCounts = new Map();
-
-    for (const p of placements) {
-        const key = p.idx + '_' + p.inst;
-        if (!instanceCounts.has(key)) {
-            instanceCounts.set(key, 0);
-            counts[p.idx]++;
-        }
-    }
-    return counts;
-}
-
-// 生成解决方案的唯一键（基于物品使用情况）
-function getSolutionKey(placements, shapesLength) {
-    const usedCounts = calculateUsedCounts(placements, shapesLength);
-    return usedCounts.join(',');
-}
-
-// 针对单个组合的优化求解器
-function solveCombination(grid, shapes, counts, combinationIndex, totalCombinations) {
-    let bestFilled = -1;
-    const solutionMap = new Map(); // 用于去重：key -> compressed solution
-    const rows = grid.length, cols = grid[0].length;
-
-    function cloneGrid(g) { return g.map(r => r.slice()); }
-
-    function backtrack(cur,old_r,old_c, remaining, placedCounter, is_skip = false) {
-        // 检查是否需要取消计算
-        if (shouldCancel) {
-            return;
-        }
-
-        const filled = countFilled(cur);
-        let remainingFree = 0;
-        for (let i = old_r; i < cur.length; i++) {
-          for (let j = 0; j < cur[0].length; j++) {
-            if (i === old_r && j < old_c) continue;
-            if (cur[i][j] === 'o') remainingFree++;
-          }
-        }
-        let remainingTotal = remaining.reduce((a, b, idx) => a + b*area(shapes[idx]), 0);
-        let remainingMin = Math.min(remainingFree, remainingTotal);
-        // 剪枝：如果当前填充数加上剩余空间都不如最佳结果，直接返回
-        if (filled + remainingFree < bestFilled) return;
-        if (is_skip && (filled + remainingMin <= bestFilled)) return;
-
-        const next = firstFreeCell(cur,old_r,old_c);
-        if (!next || !remaining.some(n=>n>0)) {
-            if (filled >= bestFilled) {
-                const compressed = compressGrid(cur, grid);
-                const solutionKey = getSolutionKey(compressed.placements, shapes.length);
-
-                if (filled > bestFilled) {
-                    // 找到更好的解决方案，清空之前的结果
-                    bestFilled = filled;
-                    solutionMap.clear();
-                    solutionMap.set(solutionKey, { filled, compressed });
-                } else if (filled === bestFilled && !solutionMap.has(solutionKey)) {
-                    // 相同质量的新解决方案
-                    solutionMap.set(solutionKey, { filled, compressed });
-
-                    // 限制解决方案数量，防止内存溢出
-                    if (solutionMap.size > MAX_SOLUTIONS_PER_WORKER) {
-                        // 随机移除一些解决方案，保持多样性
-                        const keys = Array.from(solutionMap.keys());
-                        const toRemove = keys.slice(0, Math.floor(MAX_SOLUTIONS_PER_WORKER / 2));
-                        toRemove.forEach(key => solutionMap.delete(key));
-                    }
-                }
-            }
-            return;
-        }
-
-        const [r, c] = next;
-        let triedPlacement = false;
-
-        for (const idx in remaining) {
-            if(remaining[idx] <= 0) continue;
-            const shape = shapes[idx];
-            if (!canPlaceWithAnchor(cur, shape, r, c)) continue;
-
-            triedPlacement = true;
-            const mark = ['i', idx, placedCounter[idx]];
-            placeWithAnchor(cur, shape, r, c, mark);
-            remaining[idx] -= 1;
-            placedCounter[idx] += 1;
-
-            backtrack(cur,r,c, remaining, placedCounter);
-
-            placeWithAnchor(cur, shape, r, c, 'o');
-            remaining[idx] += 1;
-            placedCounter[idx] -= 1;
-        }
-        backtrack(cur,r,c+1, remaining, placedCounter, !triedPlacement);
-    }
-    backtrack(grid.map(r => r.slice()),0,0, counts.slice(), Array(counts.length).fill(0));
-
-    // 转换压缩的解决方案为最终格式
-    const solutions = Array.from(solutionMap.values()).map(sol => ({
-        filled: sol.filled,
-        compressed: sol.compressed
-    }));
-
-    return {
-        bestFilled,
-        solutions,
-        combinationIndex
-    };
-}
-
-let currentSolveId = null;
-let shouldCancel = false;
-
-self.onmessage = function (e) {
-    const { type, grid, shapes, counts, combinationIndex, totalCombinations, solveId } = e.data;
-
-    if (type === 'solveCombination') {
-        currentSolveId = solveId;
-        shouldCancel = false;
-
-        try {
-            const result = solveCombination(grid, shapes, counts, combinationIndex, totalCombinations);
-
-            // 检查是否在计算过程中被取消
-            if (shouldCancel && currentSolveId === solveId) {
-                self.postMessage({
-                    type: 'result',
-                    result: {
-                        bestFilled: -1,
-                        solutions: [],
-                        combinationIndex: combinationIndex,
-                        counts: counts,
-                        cancelled: true
-                    },
-                    solveId
-                });
-                return;
-            }
-
-            // 只传输压缩的解决方案，减少数据传输量
-            const compactResult = {
-                bestFilled: result.bestFilled,
-                solutions: result.solutions, // 已经是压缩格式
-                combinationIndex: result.combinationIndex,
-                counts: result.counts
-            };
-
-            self.postMessage({ type: 'result', result: compactResult, solveId });
-        } catch (error) {
-            console.log(error)
-            self.postMessage({ type: 'error', error: error.message, solveId });
-        }
-    } else if (type === 'cancel') {
-        if (currentSolveId === solveId) {
-            shouldCancel = true;
-            console.log('Worker收到取消信号，solveId: ' + solveId);
-        }
-    }
-};
-      `;
-      
-      const blob = new Blob([workerCode], { type: 'application/javascript' });
-      return new Worker(URL.createObjectURL(blob));
-    }
-    
-    // Worker池管理
-    function initWorkerPool() {
-      // 清理现有Worker
-      workerPool.forEach(worker => worker.terminate());
-      workerPool = [];
-      
-      // 创建新的Worker池
-      for (let i = 0; i < MAX_WORKERS; i++) {
-        workerPool.push(createCombinationWorker());
+    // Worker 池管理
+    async function ensureWorkerPoolReady() {
+      if (!workerPool) {
+        await initWorkerPool();
       }
+      console.log('Worker 池已准备就绪');
     }
     
-    // 终止所有Worker
-    function terminateAllWorkers() {
-      workerPool.forEach(worker => worker.terminate());
-      workerPool = [];
-      console.log('所有Worker已终止');
+    // 取消 Worker 计算
+    async function cancelWorkerCalculation() {
+      if (workerPool) {
+        try {
+          const result = await workerPool.cancelAll();
+          if (result.success) {
+            console.log('Worker 计算已取消:', result.message);
+          } else {
+            console.warn('取消 Worker 计算时出现问题:', result.message);
+            if (result.error) {
+              console.warn('错误详情:', result.error);
+            }
+          }
+        } catch (error) {
+          console.error('取消 Worker 计算时发生异常:', error);
+          // 即使出现异常，也不向上抛出，保持优雅处理
+        }
+      }
     }
     
     // 辅助函数：检查组合A是否是组合B的子集
@@ -1113,14 +1458,20 @@ self.onmessage = function (e) {
       }, 0);
     }
     
-    // 新的三阶段求解架构
+    // 新的多 Worker 并行求解架构
     async function solveWithNewArchitecture(grid, shapes, counts, progressCallback, cancelToken) {
+      // 记录求解开始时间
+      const solveStartTime = performance.now();
+      
       const freeArea = computeFreeCells(grid);
       
       // 检查是否已取消
       if (cancelToken && cancelToken.cancelled) {
-        throw new Error('计算已取消');
+        return { bestFilled: 0, solutions: [] };
       }
+      
+      // 确保 Worker 池已准备就绪
+      await ensureWorkerPoolReady();
       
       // 第一阶段：生成所有有效组合
       console.log('第一阶段：生成有效物品组合...');
@@ -1133,7 +1484,7 @@ self.onmessage = function (e) {
       
       // 再次检查是否已取消
       if (cancelToken && cancelToken.cancelled) {
-        throw new Error('计算已取消');
+        return { bestFilled: 0, solutions: [] };
       }
       
       // 按面积从大到小排序组合，优先计算大面积组合
@@ -1143,251 +1494,133 @@ self.onmessage = function (e) {
         return areaB - areaA;
       });
       
-      // 初始化Worker池
-      if (workerPool.length === 0) {
-        initWorkerPool();
-        console.log(`初始化Worker池：使用 ${MAX_WORKERS} 个Worker（CPU核数：${navigator.hardwareConcurrency || '未知'}）`);
-      }
+      console.log(`使用多 Worker 并行计算（Worker 数量：${MAX_WORKERS}）`);
       
-      // 第二阶段：并行计算每个组合的最优放置（带子集剪枝）
-      console.log('第二阶段：并行计算最优放置方案...');
+      // 第二阶段：使用多 Worker 并行计算每个组合的最优放置
+      console.log('第二阶段：多 Worker 动态剪枝并行计算最优放置方案...');
       const solveId = ++currentSolveId;
       
       // 用于跟踪当前最佳组合，实现动态剪枝
       let currentBestCombination = null;
       let currentBestFilled = -1;
+      let totalSkippedCount = 0;
       
-      // 分批处理组合，实现动态剪枝
-      const batchSize = Math.min(MAX_WORKERS * 2, validCombinations.length);
-      const allResults = [];
-      let processedCount = 0;
-      let skippedCount = 0;
+      // 创建待处理任务队列（不进行预剪枝）
+      const allCombinations = validCombinations.map((combination, index) => ({
+        combination,
+        originalIndex: index
+      }));
       
-      for (let batchStart = 0; batchStart < validCombinations.length; batchStart += batchSize) {
-        // 检查是否已取消
-        if (cancelToken && cancelToken.cancelled) {
-          throw new Error('计算已取消');
+      console.log(`动态任务分配：总组合 ${validCombinations.length}，启用实时动态剪枝`);
+      
+      // 动态进度回调
+      const dynamicProgressCallback = (progress) => {
+        if (progressCallback) {
+          progressCallback(progress);
+        }
+      };
+      
+      // 动态剪枝回调函数
+      const dynamicPruningCallback = (newResults) => {
+        let prunedCount = 0;
+        
+        // 更新全局最优解
+        for (const result of newResults) {
+          if (result.bestFilled > currentBestFilled) {
+            const oldBestFilled = currentBestFilled;
+            currentBestFilled = result.bestFilled;
+            currentBestCombination = result.counts;
+            console.log(`🎯 实时更新全局最优解：填充数 ${oldBestFilled} → ${currentBestFilled}`);
+          }
         }
         
-        const batchEnd = Math.min(batchStart + batchSize, validCombinations.length);
-        const batch = validCombinations.slice(batchStart, batchEnd);
-        
-        // 对当前批次应用多重剪枝策略
-        const filteredBatch = [];
-        for (let i = 0; i < batch.length; i++) {
-          const combination = batch[i];
-          const globalIndex = batchStart + i;
-          let shouldSkip = false;
-          let skipReason = '';
+        // 对剩余任务队列进行剪枝
+        if (currentBestFilled > 0 && currentBestCombination) {
+          const originalQueueLength = workerPool.taskQueue.length;
+          const remainingTasks = [];
           
-          // 剪枝策略1：子集剪枝 - 如果当前组合是已知最佳组合的子集，则跳过
-          if (currentBestCombination && 
-              isSubset(combination, currentBestCombination) && 
-              !combination.every((c, idx) => c === currentBestCombination[idx])) {
-            shouldSkip = true;
-            skipReason = '是最佳组合的子集';
-          }
-          
-          // 剪枝策略2：面积剪枝 - 如果组合的理论最大面积小于已知最优填充数，则跳过
-          if (!shouldSkip && currentBestFilled > 0) {
-            const theoreticalMaxArea = getCombinationArea(combination, shapes);
-            if (theoreticalMaxArea < currentBestFilled) {
+          for (let i = workerPool.currentTaskIndex; i < workerPool.taskQueue.length; i++) {
+            const task = workerPool.taskQueue[i];
+            const combination = task.combination;
+            let shouldSkip = false;
+            
+            // 剪枝策略1：子集剪枝
+            if (isSubset(combination, currentBestCombination) && 
+                !combination.every((c, idx) => c === currentBestCombination[idx])) {
               shouldSkip = true;
-              skipReason = `理论最大面积${theoreticalMaxArea} < 已知最优${currentBestFilled}`;
             }
-          }
-          
-          if (shouldSkip) {
-            // console.log(`剪枝：跳过组合 ${globalIndex + 1}（${skipReason}）`);
-            skippedCount++;
-            processedCount++;
             
-            // 更新进度
-            const progress = (processedCount / validCombinations.length) * 100;
-            if (progressCallback) {
-              progressCallback(progress);
-            }
-            continue;
-          }
-          
-          filteredBatch.push({ combination, originalIndex: globalIndex });
-        }
-        
-        if (filteredBatch.length === 0) continue;
-        
-        // 跟踪当前批次的Worker和组合信息
-        const activeBatchWorkers = new Map(); // workerIndex -> { combination, promise, resolve, reject }
-        
-        // 并行处理当前批次
-        const batchPromises = filteredBatch.map(({ combination, originalIndex }) => {
-          return new Promise((resolve, reject) => {
-            const workerIndex = originalIndex % workerPool.length;
-            const worker = workerPool[workerIndex];
-            
-            // 记录当前Worker的任务信息
-            activeBatchWorkers.set(workerIndex, { 
-              combination, 
-              originalIndex,
-              resolve, 
-              reject,
-              theoreticalMaxArea: getCombinationArea(combination, shapes)
-            });
-            
-            const handleMessage = (e) => {
-              const { type, result, error, solveId: msgSolveId } = e.data;
-              
-              if (msgSolveId !== solveId) return;
-              
-              if (type === 'result') {
-                worker.removeEventListener('message', handleMessage);
-                
-                // 检查这个Worker是否已经被标记为取消，如果是则不重复计数
-                const workerInfo = activeBatchWorkers.get(workerIndex);
-                const wasAlreadyCancelled = workerInfo && workerInfo.cancelled;
-                
-                activeBatchWorkers.delete(workerIndex);
-                
-                // 更新当前最佳组合（用于后续剪枝）
-                if (result.bestFilled > currentBestFilled) {
-                  const oldBestFilled = currentBestFilled;
-                  currentBestFilled = result.bestFilled;
-                  console.log(JSON.parse(JSON.stringify(result)))
-                  console.log(`🎯 更新全局最优解：填充数 ${oldBestFilled} → ${currentBestFilled}`);
-                  
-                  // 立即取消当前批次中理论上不可能超越新最优解的Worker
-                  let cancelledWorkers = 0;
-                  for (const [wIdx, workerInfo] of activeBatchWorkers.entries()) {
-                    if (workerInfo.theoreticalMaxArea < currentBestFilled) {
-                      console.log(`🚫 取消Worker ${wIdx}：理论最大面积${workerInfo.theoreticalMaxArea} < 当前最优${currentBestFilled}`);
-                      
-                      // 发送取消消息给Worker
-                      workerPool[wIdx].postMessage({
-                        type: 'cancel',
-                        solveId: solveId
-                      });
-                      
-                      // 标记Worker为已取消，避免重复计数
-                      workerInfo.cancelled = true;
-                      
-                      // 立即resolve这个Promise，标记为被取消
-                      workerInfo.resolve({
-                        bestFilled: -1,
-                        solutions: [],
-                        combinationIndex: workerInfo.originalIndex,
-                        counts: workerInfo.combination,
-                        cancelled: true
-                      });
-                      
-                      activeBatchWorkers.delete(wIdx);
-                      cancelledWorkers++;
-                      
-                      // 被取消的Worker需要在这里计数，因为它们不会触发正常的handleMessage
-                      processedCount++;
-                      
-                      // 更新进度
-                      const progress = (processedCount / validCombinations.length) * 100;
-                      if (progressCallback) {
-                        progressCallback(progress);
-                      }
-                    }
-                  }
-                  
-                  if (cancelledWorkers > 0) {
-                    console.log(`⚡ 已取消 ${cancelledWorkers} 个无效Worker，节省计算资源`);
-                  }
-                  
-                  // 计算因为这个新的最优解而可以跳过的剩余组合数量
-                  let canSkipCount = 0;
-                  for (let futureIdx = batchStart + filteredBatch.length; futureIdx < validCombinations.length; futureIdx++) {
-                    const futureCombination = validCombinations[futureIdx];
-                    const futureArea = getCombinationArea(futureCombination, shapes);
-                    if (futureArea < currentBestFilled) {
-                      canSkipCount++;
-                    }
-                  }
-                  if (canSkipCount > 0) {
-                    console.log(`⚡ 新最优解将使后续 ${canSkipCount} 个组合可被剪枝`);
-                  }
-                }
-                
-                resolve(result);
-                
-                // 只有在Worker没有被预先取消的情况下才增加计数
-                // 被取消的Worker已经在动态取消时计数了，这里不再重复计数
-                if (!wasAlreadyCancelled && !result.cancelled) {
-                  processedCount++;
-                  // 更新进度
-                  const progress = (processedCount / validCombinations.length) * 100;
-                  if (progressCallback) {
-                    progressCallback(progress);
-                  }
-                }
-              } else if (type === 'error') {
-                worker.removeEventListener('message', handleMessage);
-                
-                // 检查这个Worker是否已经被标记为取消
-                const workerInfo = activeBatchWorkers.get(workerIndex);
-                const wasAlreadyCancelled = workerInfo && workerInfo.cancelled;
-                
-                activeBatchWorkers.delete(workerIndex);
-                
-                // 只有在Worker没有被预先取消的情况下才增加计数
-                // 被取消的Worker已经在动态取消时计数了，这里不再重复计数
-                if (!wasAlreadyCancelled) {
-                  processedCount++;
-                  // 更新进度
-                  const progress = (processedCount / validCombinations.length) * 100;
-                  if (progressCallback) {
-                    progressCallback(progress);
-                  }
-                }
-                
-                reject(new Error(error));
+            // 剪枝策略2：面积剪枝
+            if (!shouldSkip) {
+              const theoreticalMaxArea = getCombinationArea(combination, shapes);
+              if (theoreticalMaxArea < currentBestFilled) {
+                shouldSkip = true;
               }
-            };
+            }
             
-            worker.addEventListener('message', handleMessage);
-            
-            worker.postMessage({
-              type: 'solveCombination',
-              grid: grid,
-              shapes: shapes,
-              counts: combination,
-              combinationIndex: originalIndex,
-              totalCombinations: validCombinations.length,
-              solveId: solveId
-            });
-          });
-        });
-        
-        // 等待当前批次完成
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        // 检查是否已取消
-        if (cancelToken && cancelToken.cancelled) {
-          throw new Error('计算已取消');
+            if (!shouldSkip) {
+              remainingTasks.push(task);
+            } else {
+              prunedCount++;
+            }
+          }
+          
+          // 更新任务队列
+          const newQueue = workerPool.taskQueue.slice(0, workerPool.currentTaskIndex).concat(remainingTasks);
+          workerPool.taskQueue = newQueue;
+          
+          totalSkippedCount += prunedCount;
+          
+          if (prunedCount > 0) {
+            console.log(`🔥 实时剪枝：移除 ${prunedCount} 个任务，剩余 ${remainingTasks.length} 个任务`);
+          }
         }
         
-        allResults.push(...batchResults);
+        return prunedCount;
+      };
+      
+      // 使用动态任务分配处理所有组合，启用动态剪枝
+      const allResults = await workerPool.solveDynamic(
+        allCombinations,
+        grid,
+        shapes,
+        dynamicProgressCallback,
+        dynamicPruningCallback
+      );
+      
+      // 检查是否已取消
+      if (cancelToken && cancelToken.cancelled) {
+        return { bestFilled: 0, solutions: [] };
       }
       
-      const actualCalculated = validCombinations.length - skippedCount;
-      const pruningEfficiency = validCombinations.length > 0 ? (skippedCount / validCombinations.length * 100).toFixed(1) : '0.0';
-      console.log(`📊 剪枝统计：总组合 ${validCombinations.length}，跳过 ${skippedCount} (${pruningEfficiency}%)，实际计算 ${actualCalculated}`);
+      // 最终更新全局最优解（确保没有遗漏）
+      for (const result of allResults) {
+        if (result.bestFilled > currentBestFilled) {
+          const oldBestFilled = currentBestFilled;
+          currentBestFilled = result.bestFilled;
+          currentBestCombination = result.counts;
+          console.log(`🎯 最终更新全局最优解：填充数 ${oldBestFilled} → ${currentBestFilled}`);
+        }
+      }
+      
+      const actualCalculated = allResults.length;
+      const pruningEfficiency = validCombinations.length > 0 ? (totalSkippedCount / validCombinations.length * 100).toFixed(1) : '0.0';
+      console.log(`📊 动态剪枝统计：总组合 ${validCombinations.length}，动态跳过 ${totalSkippedCount} (${pruningEfficiency}%)，实际计算 ${actualCalculated}`);
       
       // 第三阶段：汇总最优结果
       console.log('第三阶段：汇总最优结果...');
       const successfulResults = allResults
-        .filter(r => r.status === 'fulfilled' && r.value.solutions.length > 0 && !r.value.cancelled)
-        .map(r => r.value);
+        .filter(r => r.solutions && r.solutions.length > 0 && !r.cancelled && !r.error);
       
       const cancelledResults = allResults
-        .filter(r => r.status === 'fulfilled' && r.value.cancelled)
+        .filter(r => r.cancelled)
         .length;
       
-      if (cancelledResults > 0) {
-        console.log(`📊 优化统计：成功取消 ${cancelledResults} 个无效Worker，节省计算资源`);
-      }
+      const errorResults = allResults
+        .filter(r => r.error)
+        .length;
+      
+      console.log(`📊 任务统计：成功 ${successfulResults.length}，取消 ${cancelledResults}，错误 ${errorResults}，总计 ${allResults.length}`);
       
       if (successfulResults.length === 0) {
         return { bestFilled: 0, solutions: [] };
@@ -1449,7 +1682,11 @@ self.onmessage = function (e) {
         if (allBestSolutions.length >= 50) break;
       }
       
-      console.log(`最终收集到 ${allBestSolutions.length} 个不同的最优解决方案`);
+      // 计算求解耗时
+      const solveEndTime = performance.now();
+      const solveDuration = (solveEndTime - solveStartTime) / 1000; // 转换为秒
+      
+      console.log(`最终收集到 ${allBestSolutions.length} 个不同的最优解决方案，求解耗时: ${solveDuration.toFixed(2)}秒`);
       
       return { 
         bestFilled: globalBestFilled, 
@@ -1670,6 +1907,9 @@ self.onmessage = function (e) {
         document.getElementById('countsSummary').textContent = '';
         solutionCountEl.textContent = '解法：0种';
         solutionSelect.innerHTML = '';
+        // 只隐藏选择下拉框，保留解法数量显示
+        solutionSelect.parentElement.style.display = 'none';
+        // 展示空格子
         renderVis(Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 'o')));
         return;
       }
@@ -1677,6 +1917,9 @@ self.onmessage = function (e) {
       const { solutions, selectedIndex } = resultsData;
       currentSolutions = solutions;
       const totalFree = computeFreeCells(pkg);
+      
+      // 显示选择下拉框
+      solutionSelect.parentElement.style.display = 'inline';
       
       // 重建选项
       solutionSelect.innerHTML = '';
@@ -1714,6 +1957,8 @@ self.onmessage = function (e) {
       solutionCountEl.textContent = '解法：0种';
       solutionSelect.innerHTML = '';
       currentSolutions = [];
+      // 只隐藏选择下拉框，保留解法数量显示
+      solutionSelect.parentElement.style.display = 'none';
       // 显示空的网格
       renderVis(Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 'o')));
     }
@@ -1748,8 +1993,8 @@ self.onmessage = function (e) {
         currentCalculationPromise.cancelToken.cancelled = true;
       }
       
-      // 终止所有Worker
-      terminateAllWorkers();
+      // 取消 Worker 计算
+      cancelWorkerCalculation();
       
       // 隐藏进度条和遮罩
       const progressContainer = document.getElementById('progressContainer');
@@ -1866,10 +2111,17 @@ self.onmessage = function (e) {
               visEl.innerHTML = '';
               document.getElementById('countsSummary').textContent = '';
               solutionCountEl.textContent = '解法：0种';
+              // 只隐藏选择下拉框，保留解法数量显示
+              solutionSelect.parentElement.style.display = 'none';
+              // 展示空格子
+              renderVis(Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 'o')));
               // 保存空结果
               saveResults([]);
               return;
             }
+            
+            // 显示选择下拉框
+            solutionSelect.parentElement.style.display = 'inline';
             
             solutionCountEl.textContent = `解法：${unique.length}种`;
             unique.forEach((s, i) => {
@@ -1935,12 +2187,21 @@ self.onmessage = function (e) {
       }
     };
 
-    function init() {
+    async function init() {
       loadState();
       renderGrid();
       renderShapes();
       // 载入并显示上次的计算结果
       loadAndDisplayResults();
+      
+      // 在页面加载时就开始初始化 Worker 池
+      console.log('开始初始化 Worker 池...');
+      try {
+        await initWorkerPool();
+        console.log('Worker 池在页面加载时初始化完成');
+      } catch (error) {
+        console.warn('Worker 池初始化失败，将在需要时重试:', error);
+      }
     }
     init();
   </script>
