@@ -1028,6 +1028,27 @@
     let dragCurrentCell = null;
     let hasMoved = false; // 标记是否真正发生了拖动
 
+    // 获取触摸或鼠标事件的坐标
+    function getEventCoordinates(e) {
+      if (e.touches && e.touches.length > 0) {
+        return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      }
+      return { x: e.clientX, y: e.clientY };
+    }
+
+    // 根据坐标获取对应的网格单元格
+    function getCellFromCoordinates(x, y) {
+      const element = document.elementFromPoint(x, y);
+      if (element && element.classList.contains('cell') && element.dataset.row !== undefined) {
+        return {
+          row: parseInt(element.dataset.row),
+          col: parseInt(element.dataset.col),
+          element: element
+        };
+      }
+      return null;
+    }
+
     function renderGrid() {
       gridEl.innerHTML = '';
       gridEl.style.gridTemplateColumns = `repeat(${SIZE}, 30px)`;
@@ -1051,29 +1072,33 @@
             }
           };
           
-          // 鼠标按下
+          // 鼠标按下事件
           div.onmousedown = (e) => {
             e.preventDefault();
-            isMouseDown = true;
-            hasMoved = false;
-            dragStartCell = { row: r, col: c };
-            dragCurrentCell = { row: r, col: c };
+            startDrag(r, c);
           };
           
-          // 拖动过程中
+          // 触摸开始事件
+          div.ontouchstart = (e) => {
+            e.preventDefault();
+            startDrag(r, c);
+          };
+          
+          // 触摸结束事件 - 处理单击切换
+          div.ontouchend = (e) => {
+            e.preventDefault();
+            // 如果没有发生拖动，执行单击切换
+            if (!hasMoved && !isDragging) {
+              pkg[r][c] = pkg[r][c] === 'x' ? 'o' : 'x';
+              renderGrid();
+              saveState();
+            }
+          };
+          
+          // 鼠标进入事件（用于拖动过程中）
           div.onmouseenter = () => {
             if (isMouseDown) {
-              // 检查是否真正移动到了不同的格子
-              if (!dragCurrentCell || dragCurrentCell.row !== r || dragCurrentCell.col !== c) {
-                if (!isDragging) {
-                  // 第一次移动，开始拖动模式
-                  isDragging = true;
-                  hasMoved = true;
-                  updateSelectionOverlay();
-                }
-                dragCurrentCell = { row: r, col: c };
-                updateSelectionOverlay();
-              }
+              updateDragToCell(r, c);
             }
           };
           
@@ -1083,22 +1108,67 @@
       
       // 全局鼠标释放事件
       document.onmouseup = () => {
-        if (isDragging && hasMoved) {
-          applySelection();
-        }
-        
-        // 重置所有状态
-        isDragging = false;
-        isMouseDown = false;
-        dragStartCell = null;
-        dragCurrentCell = null;
-        selectionOverlay.style.display = 'none';
-        
-        // 延迟重置hasMoved，让click事件能够正确判断
-        setTimeout(() => {
-          hasMoved = false;
-        }, 10);
+        endDrag();
       };
+      
+      // 全局触摸结束事件
+      document.ontouchend = () => {
+        endDrag();
+      };
+      
+      // 全局触摸移动事件（用于拖动过程中）
+      document.ontouchmove = (e) => {
+        if (isMouseDown) {
+          e.preventDefault();
+          const coords = getEventCoordinates(e);
+          const cellInfo = getCellFromCoordinates(coords.x, coords.y);
+          if (cellInfo) {
+            updateDragToCell(cellInfo.row, cellInfo.col);
+          }
+        }
+      };
+    }
+
+    // 开始拖动
+    function startDrag(row, col) {
+      isMouseDown = true;
+      hasMoved = false;
+      dragStartCell = { row, col };
+      dragCurrentCell = { row, col };
+    }
+
+    // 更新拖动到指定单元格
+    function updateDragToCell(row, col) {
+      // 检查是否真正移动到了不同的格子
+      if (!dragCurrentCell || dragCurrentCell.row !== row || dragCurrentCell.col !== col) {
+        if (!isDragging) {
+          // 第一次移动，开始拖动模式
+          isDragging = true;
+          hasMoved = true;
+          updateSelectionOverlay();
+        }
+        dragCurrentCell = { row, col };
+        updateSelectionOverlay();
+      }
+    }
+
+    // 结束拖动
+    function endDrag() {
+      if (isDragging && hasMoved) {
+        applySelection();
+      }
+      
+      // 重置所有状态
+      isDragging = false;
+      isMouseDown = false;
+      dragStartCell = null;
+      dragCurrentCell = null;
+      selectionOverlay.style.display = 'none';
+      
+      // 延迟重置hasMoved，让click事件能够正确判断
+      setTimeout(() => {
+        hasMoved = false;
+      }, 10);
     }
 
     // 更新选择遮罩层
