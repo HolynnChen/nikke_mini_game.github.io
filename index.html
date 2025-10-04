@@ -1737,8 +1737,7 @@ self.onmessage = async function(e) {
               
               allBestSolutions.push({
                 filled: solution.filled,
-                grid: decompressedGrid,
-                counts: result.counts
+                grid: decompressedGrid
               });
               
               // 限制最终解决方案数量，防止主线程内存溢出
@@ -2163,8 +2162,7 @@ self.onmessage = async function(e) {
             const unique = [];
             
             for (const s of solutions) {
-              // 使用已有的counts信息，或者从grid推导
-              const countsToUse = s.counts || deriveCountsFromGrid(s.grid, ITEM_SHAPES.length);
+              const countsToUse = deriveCountsFromGrid(s.grid, ITEM_SHAPES.length);
               const key = countsToUse.join(',');
               if (!seen.has(key)) {
                 const entry = { ...s, counts: countsToUse };
